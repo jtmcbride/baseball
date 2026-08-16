@@ -212,6 +212,7 @@ version = "0.1.0"
 source = { editable = "apps/api" }
 dependencies = [
     { name = "bbcore" },
+    { name = "bbml" },
     { name = "fastapi" },
     { name = "polars" },
     { name = "pyarrow" },
@@ -227,6 +228,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bbcore", editable = "packages/bbcore" },
+    { name = "bbml", editable = "packages/bbml" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "polars", specifier = ">=1.17" },
     { name = "pyarrow", specifier = ">=18.0" },
@@ -297,7 +299,9 @@ dependencies = [
     { name = "numpy" },
     { name = "polars" },
     { name = "pyarrow" },
+    { name = "rich" },
     { name = "scikit-learn" },
+    { name = "typer" },
 ]
 
 [package.optional-dependencies]
@@ -313,7 +317,9 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.1" },
     { name = "polars", specifier = ">=1.17" },
     { name = "pyarrow", specifier = ">=18.0" },
+    { name = "rich", specifier = ">=13.9" },
     { name = "scikit-learn", specifier = ">=1.6" },
+    { name = "typer", specifier = ">=0.15" },
 ]
 provides-extras = ["tracking"]
 

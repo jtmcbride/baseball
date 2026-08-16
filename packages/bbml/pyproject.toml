@@ -10,12 +10,17 @@ dependencies = [
     "numpy>=2.1",
     "scikit-learn>=1.6",
     "lightgbm>=4.5",
+    "typer>=0.15",
+    "rich>=13.9",
 ]
 
 [project.optional-dependencies]
 # Kept out of the default install: heavy, and only needed once M2 model
 # comparison starts.
 tracking = ["mlflow>=2.19"]
+
+[project.scripts]
+bb-ml = "bbml.cli:app"
 
 [build-system]
 requires = ["hatchling"]

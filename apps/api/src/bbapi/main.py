@@ -8,7 +8,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from bbapi.deps import settings, warehouse
-from bbapi.routers import pitches, players, zones
+from bbapi.routers import pitches, players, predict, zones
 from bbcore.logging import setup_logging
 
 setup_logging()
@@ -69,6 +69,7 @@ app.include_router(meta)
 app.include_router(players.router)
 app.include_router(pitches.router)
 app.include_router(zones.router)
+app.include_router(predict.router)
 
 
 def main() -> None:

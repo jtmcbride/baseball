@@ -96,6 +96,25 @@ def player_external_ids(mlbam_id: int) -> dict[str, Any]:
     return rows[0]
 
 
+@router.get("/{mlbam_id}/games")
+def player_games(
+    mlbam_id: int,
+    season: int | None = None,
+    limit: int = Query(25, ge=1, le=200),
+) -> list[dict[str, Any]]:
+    """A pitcher's most recent games — backs the at-bat replay picker."""
+    require_table("fact_pitch")
+    sql = """
+        SELECT game_pk, game_date, season, count(*) AS pitches
+        FROM fact_pitch
+        WHERE pitcher = $id AND ($season IS NULL OR season = $season)
+        GROUP BY game_pk, game_date, season
+        ORDER BY game_date DESC
+        LIMIT $limit
+    """
+    return warehouse().execute(sql, {"id": mlbam_id, "season": season, "limit": limit}).to_pylist()
+
+
 @router.get("")
 def list_leaders(
     season: int | None = None,

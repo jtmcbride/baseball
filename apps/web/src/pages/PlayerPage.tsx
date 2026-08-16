@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArsenalTable } from "../components/ArsenalTable";
 import { MovementPlot, type MovementPoint } from "../components/MovementPlot";
 import { ReleasePlot, type ReleasePoint } from "../components/ReleasePlot";
+import { ReplayStrip } from "../components/ReplayStrip";
 import { StrikeZoneHeatmap } from "../components/StrikeZoneHeatmap";
 import { VeloTrend, type VeloPoint } from "../components/VeloTrend";
 import { api, columns } from "../lib/api";
@@ -10,6 +11,10 @@ import { useFilters } from "../store/filters";
 
 export function PlayerPage() {
   const { playerId, role, season, metric, pitchType, vsHand, setPitchType } = useFilters();
+  const [replayGame, setReplayGame] = useState<number | null>(null);
+  // A stale game_pk from the previous pitcher would 404 against the new one's
+  // roster of games until this clears it back to "pick the most recent".
+  useEffect(() => setReplayGame(null), [playerId]);
 
   const profile = useQuery({
     queryKey: ["profile", playerId],
@@ -21,6 +26,21 @@ export function PlayerPage() {
     queryKey: ["arsenal", playerId, season],
     queryFn: () => api.arsenal(playerId!, season ?? undefined),
     enabled: !!playerId && role === "pitcher",
+  });
+
+  const games = useQuery({
+    queryKey: ["games", playerId, season],
+    queryFn: () => api.games(playerId!, season ?? undefined),
+    enabled: !!playerId && role === "pitcher",
+  });
+
+  const gameForReplay = replayGame ?? games.data?.[0]?.game_pk ?? null;
+
+  const replay = useQuery({
+    queryKey: ["replay", gameForReplay, playerId],
+    queryFn: () => api.replay(gameForReplay!, playerId!),
+    enabled: !!gameForReplay && !!playerId && role === "pitcher",
+    retry: false,
   });
 
   const pitches = useQuery({
@@ -124,6 +144,52 @@ export function PlayerPage() {
           {rows.length ? <VeloTrend points={filtered} /> : <Skeleton h={240} />}
         </section>
       </div>
+
+      {role === "pitcher" && (
+        <section className="card">
+          <h3>At-bat replay</h3>
+          <p className="subtitle">
+            Actual pitches vs. the next-pitch model's calls, made from state strictly before
+            each pitch was thrown.
+          </p>
+          {games.data && games.data.length > 0 ? (
+            <>
+              <select
+                value={gameForReplay ?? ""}
+                onChange={(e) => setReplayGame(Number(e.target.value))}
+                style={{
+                  marginBottom: 10,
+                  padding: "4px 8px",
+                  borderRadius: 4,
+                  border: "1px solid var(--gridline)",
+                  background: "var(--surface-1)",
+                  color: "var(--text-primary)",
+                  fontSize: 12,
+                }}
+              >
+                {games.data.map((g) => (
+                  <option key={g.game_pk} value={g.game_pk}>
+                    {g.game_date} · {g.pitches} pitches
+                  </option>
+                ))}
+              </select>
+              {replay.isError ? (
+                <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                  No model is registered yet — run <code>bb-ml next-pitch</code>.
+                </p>
+              ) : replay.data ? (
+                <ReplayStrip pitches={replay.data} />
+              ) : (
+                <Skeleton h={160} />
+              )}
+            </>
+          ) : games.isLoading ? (
+            <Skeleton h={160} />
+          ) : (
+            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>No games found.</p>
+          )}
+        </section>
+      )}
 
       {role === "pitcher" && (
         <section className="card">

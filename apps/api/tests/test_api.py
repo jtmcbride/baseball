@@ -165,3 +165,57 @@ class TestZones:
                 assert body["layout"] == "row_major_x_then_z"
                 return
         pytest.skip("no zone grids built for the sampled players")
+
+
+def _model_available() -> bool:
+    from bbcore.config import get_settings
+    from bbml.registry import latest_dir
+
+    return latest_dir("next_pitch", settings=get_settings()) is not None
+
+
+class TestPredict:
+    def test_next_pitch_returns_a_distribution(self, client, health, a_pitcher):
+        if not _model_available():
+            pytest.skip("no next-pitch model registered — run `bb-ml next-pitch` first")
+        r = client.post(
+            "/predict/next-pitch",
+            json={
+                "pitcher_id": a_pitcher,
+                "batter_id": a_pitcher,
+                "season": 2025,
+                "balls": 0,
+                "strikes": 2,
+                "stand": "R",
+                "p_throws": "R",
+                "home_team": "NYY",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        probs = [row["probability"] for row in body["pitch_type"]]
+        assert probs == sorted(probs, reverse=True)
+        assert sum(probs) <= 1.0 + 1e-6
+
+    def test_replay_pairs_actual_with_predicted(self, client, health):
+        if not _model_available():
+            pytest.skip("no next-pitch model registered — run `bb-ml next-pitch` first")
+        rows = client.get(
+            "/players", params={"limit": 1, "min_pitches": 200, "season": 2025}
+        ).json()
+        if not rows:
+            pytest.skip("no qualifying pitcher for a replay")
+        pitcher_id = rows[0]["mlbam_id"]
+        games = client.get(f"/players/{pitcher_id}/games", params={"limit": 1}).json()
+        if not games:
+            pytest.skip("no games found for the sampled pitcher")
+        r = client.get(
+            f"/games/{games[0]['game_pk']}/replay", params={"pitcher_id": pitcher_id}
+        )
+        assert r.status_code == 200
+        pitches = r.json()
+        assert pitches
+        first = pitches[0]
+        assert first["actual_pitch_type"]
+        assert first["predicted_pitch_type"]
+        assert "actual_location_class" in first

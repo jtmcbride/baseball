@@ -119,6 +119,38 @@ export interface SeasonRow {
   games: number;
 }
 
+export interface GameSummary {
+  game_pk: number;
+  game_date: string;
+  season: number;
+  pitches: number;
+}
+
+export interface PredictedPitchType {
+  pitch_type: string;
+  probability: number;
+}
+
+export interface PredictedLocation {
+  class: number;
+  row: number;
+  col: number;
+  probability: number;
+}
+
+export interface ReplayPitch {
+  at_bat_number: number;
+  pitch_number: number;
+  balls: number;
+  strikes: number;
+  actual_pitch_type: string | null;
+  actual_plate_x: number | null;
+  actual_plate_z_norm: number | null;
+  actual_location_class: number | null;
+  predicted_pitch_type: PredictedPitchType[];
+  predicted_location?: PredictedLocation[];
+}
+
 // --- endpoints --------------------------------------------------------------
 
 export const api = {
@@ -140,6 +172,10 @@ export const api = {
   pitches: (params: Record<string, unknown>) => arrow("/pitches", params),
   movement: (pitcherId: number, season?: number) =>
     arrow("/pitches/movement", { pitcher_id: pitcherId, season }),
+  games: (id: number, season?: number) =>
+    json<GameSummary[]>(`/players/${id}/games`, { season, limit: 25 }),
+  replay: (gamePk: number, pitcherId: number) =>
+    json<ReplayPitch[]>(`/games/${gamePk}/replay`, { pitcher_id: pitcherId }),
 };
 
 /** Materialize selected Arrow columns as plain JS objects for chart code. */
