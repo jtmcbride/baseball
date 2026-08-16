@@ -109,6 +109,52 @@ SCHEMA_OVERRIDES: dict[str, type[pl.DataType]] = {
     "break_length_deprecated": pl.Float64,
     "tfs_deprecated": pl.Float64,
     "tfs_zulu_deprecated": pl.Utf8,
+    # Core physics/measurement columns. On any day where a column is null for
+    # EVERY pitch (e.g. no batted balls, or a field not yet backfilled that far
+    # back), polars' CSV reader infers String rather than Float64/Int64 for that
+    # file — there is nothing to infer a numeric type FROM. `diagonal_relaxed`
+    # concat across a season's ~180 day-files then upcasts the whole column to
+    # String the moment one file disagrees with the rest, which broke `enrich`'s
+    # arithmetic on `sz_top`/`sz_bot` the first time a 2015-2017 backfill ran.
+    # Pinning every measurement column here, not just the two that happened to
+    # trigger the error, closes the whole class of failure rather than the one
+    # instance of it.
+    "release_speed": pl.Float64,
+    "release_pos_x": pl.Float64,
+    "release_pos_y": pl.Float64,
+    "release_pos_z": pl.Float64,
+    "release_extension": pl.Float64,
+    "release_spin_rate": pl.Float64,
+    "pfx_x": pl.Float64,
+    "pfx_z": pl.Float64,
+    "plate_x": pl.Float64,
+    "plate_z": pl.Float64,
+    "sz_top": pl.Float64,
+    "sz_bot": pl.Float64,
+    "hc_x": pl.Float64,
+    "hc_y": pl.Float64,
+    "vx0": pl.Float64,
+    "vy0": pl.Float64,
+    "vz0": pl.Float64,
+    "ax": pl.Float64,
+    "ay": pl.Float64,
+    "az": pl.Float64,
+    "effective_speed": pl.Float64,
+    "launch_speed": pl.Float64,
+    "launch_angle": pl.Float64,
+    "hit_distance_sc": pl.Float64,
+    "estimated_ba_using_speedangle": pl.Float64,
+    "estimated_woba_using_speedangle": pl.Float64,
+    "estimated_slg_using_speedangle": pl.Float64,
+    "woba_denom": pl.Float64,
+    "pitcher_days_since_prev_game": pl.Float64,
+    "batter_days_since_prev_game": pl.Float64,
+    "pitcher_days_until_next_game": pl.Float64,
+    "batter_days_until_next_game": pl.Float64,
+    "api_break_z_with_gravity": pl.Float64,
+    "api_break_x_arm": pl.Float64,
+    "api_break_x_batter_in": pl.Float64,
+    "spin_axis": pl.Float64,
     # Bat/swing tracking: null before 2024 (bat_speed, swing_length) and before
     # 2025 (attack_*, swing_path_tilt). Pinning them to Float64 keeps the schema
     # stable across the whole 2015+ lake instead of flipping to Null on old
