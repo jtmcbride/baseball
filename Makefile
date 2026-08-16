@@ -60,9 +60,12 @@ fmt:
 status:  ## Ingest progress
 	uv run bb status
 
-train:  ## Train + register both next-pitch model heads
+train:  ## Train + register every model head
 	uv run bb-ml next-pitch
 	uv run bb-ml location
+	# Stuff+/Location+/Pitching+ also rebuild mart_pitcher_stuff, which reads
+	# the lake directly — no warehouse lock, so this is safe while the API runs.
+	uv run bb-ml stuff
 	uv run bb-ml status
 
 clean:  ## Drop derived data. Raw is preserved — never re-crawl.

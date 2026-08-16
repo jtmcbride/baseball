@@ -139,9 +139,11 @@ def game_replay(game_pk: int, pitcher_id: int) -> list[dict[str, Any]]:
     require_table("fact_pitch")
     model, loc_model = _require_models()
 
-    season_row = warehouse().execute(
-        "SELECT DISTINCT season FROM fact_pitch WHERE game_pk = $g", {"g": game_pk}
-    ).to_pylist()
+    season_row = (
+        warehouse()
+        .execute("SELECT DISTINCT season FROM fact_pitch WHERE game_pk = $g", {"g": game_pk})
+        .to_pylist()
+    )
     if not season_row:
         raise HTTPException(404, f"No pitches found for game_pk {game_pk}")
     season = season_row[0]["season"]

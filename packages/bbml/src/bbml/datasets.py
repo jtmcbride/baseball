@@ -155,13 +155,20 @@ def assert_features_are_clean(df: pl.DataFrame) -> None:
         raise AssertionError(f"Feature frame is missing {missing}")
 
 
-def validate(split: Split) -> None:
-    """Run every leakage check. Called before any training run."""
+def validate(split: Split, *, check_features: bool = True) -> None:
+    """Run every leakage check. Called before any training run.
+
+    `check_features=False` is for the pitch-quality models (`features/stuff.py`),
+    whose inputs are deliberately the thrown pitch itself. The temporal and
+    plate-appearance checks still apply to them and are the ones that matter
+    there; only the next-pitch feature contract does not.
+    """
     assert_split_is_temporal(split)
     assert_no_plate_appearance_straddles(split)
-    for part in (split.train, split.val, split.test):
-        if part.height:
-            assert_features_are_clean(part)
+    if check_features:
+        for part in (split.train, split.val, split.test):
+            if part.height:
+                assert_features_are_clean(part)
     log.info("split validated\n%s", split.describe())
 
 
@@ -181,7 +188,7 @@ def prepare(
     return out
 
 
-def auto_split(df: pl.DataFrame) -> Split:
+def auto_split(df: pl.DataFrame, *, check_features: bool = True) -> Split:
     """Pick the widest temporally-valid split the available data supports.
 
     Whole-season splits need at least three seasons. With less — which is the
@@ -200,7 +207,7 @@ def auto_split(df: pl.DataFrame) -> Split:
     else:
         split = date_split(df)
         log.info("only %d season(s) available — using a chronological date split", len(seasons))
-    validate(split)
+    validate(split, check_features=check_features)
     return split
 
 

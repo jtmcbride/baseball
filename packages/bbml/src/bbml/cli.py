@@ -126,6 +126,104 @@ def train_location(
     console.print(f"[green]Saved to {directory}[/green]")
 
 
+@app.command("stuff")
+def train_pitch_quality(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+    rounds: Annotated[int, typer.Option(help="Max boosting rounds.")] = 2000,
+) -> None:
+    """Train Stuff+ / Location+ / Pitching+ and register all three heads.
+
+    All three regress the same count-based run value target on different slices
+    of the same frame, so they are trained together — a Stuff+ and a Location+
+    built from different target definitions would not decompose into anything.
+    """
+    from bbml import datasets as ds
+    from bbml.features.run_value import RunValue
+    from bbml.features.stuff import ROLES, TARGET_RUN_VALUE, build_pitch_quality_frame
+    from bbml.models.pitch_quality import (
+        PitchQualityModel,
+        aggregate_correlation,
+        evaluate,
+        predictive_validity,
+        stability,
+    )
+    from bbml.registry import save_model
+
+    frame = build_pitch_quality_frame(seasons=list(season) if season else None).sort(
+        ["game_date", "game_pk", "at_bat_number", "pitch_number"]
+    )
+    # check_features=False: these models are supposed to read the pitch itself.
+    split = ds.auto_split(frame, check_features=False)
+
+    # The run value table is fitted on TRAIN only. It is a league aggregate, but
+    # one fitted across the whole frame would still carry test-season outcomes
+    # into the labels the model is scored against.
+    rv = RunValue.fit(split.train)
+    train, val, test = (rv.attach(p) for p in (split.train, split.val, split.test))
+    scored = rv.attach(frame)
+    console.print(f"target sd {scored[TARGET_RUN_VALUE].std():.4f}")
+
+    table = Table(title="pitch quality")
+    for col in ("", "iters", "r2", "rank", "agg corr", "yoy grade", "yoy actual"):
+        table.add_column(col, justify="right" if col else "left")
+
+    for role in ROLES:
+        model = PitchQualityModel(role=role).fit(train, val, num_boost_round=rounds)
+        ev = evaluate(model, test)
+        agg, n_groups = aggregate_correlation(model, test)
+        yoy = stability(model, scored)
+        pv = predictive_validity(model, scored)
+        yoy_grade = float(yoy[f"{role}_yoy"].mean()) if yoy.height else float("nan")
+        yoy_actual = float(yoy["own_rv_yoy"].mean()) if yoy.height else float("nan")
+        table.add_row(
+            role,
+            str(model.best_iteration),
+            f"{ev.r2:.4f}",
+            f"{ev.rank_corr:.3f}",
+            f"{agg:.3f}",
+            f"{yoy_grade:.3f}",
+            f"{yoy_actual:.3f}",
+        )
+
+        directory = save_model(
+            model,
+            f"{role}_plus",
+            params={"rounds": rounds, "best_iteration": model.best_iteration},
+            metrics={
+                "r2": ev.r2,
+                "rank_corr": ev.rank_corr,
+                "aggregate_corr": agg,
+                "aggregate_groups": float(n_groups),
+                "stability": yoy_grade,
+                "stability_of_actual": yoy_actual,
+                "predictive_validity": (
+                    float(pv[f"{role}_vs_next"].mean()) if pv.height else float("nan")
+                ),
+                "predictive_validity_of_actual": (
+                    float(pv["own_rv_vs_next"].mean()) if pv.height else float("nan")
+                ),
+            },
+        )
+        # The target definition ships with the model: a grade is only meaningful
+        # against the run value table it was fitted to.
+        rv.save(directory / "run_value.json")
+
+    console.print(table)
+    console.print("[dim]r2 is per-pitch and expected to be ~0 — see pitch_quality.py.[/dim]")
+    build_stuff_mart(season=list(season) if season else None)
+
+
+@app.command("stuff-mart")
+def build_stuff_mart(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+) -> None:
+    """Score every pitch with the registered heads and rebuild `mart_pitcher_stuff`."""
+    from bbml.marts import build_pitch_quality_mart
+
+    mart = build_pitch_quality_mart(seasons=list(season) if season else None)
+    console.print(f"[green]mart_pitcher_stuff: {mart.height} rows[/green]")
+
+
 @app.command("status")
 def status() -> None:
     """Show which model versions are registered."""
@@ -135,7 +233,7 @@ def status() -> None:
     table = Table(title="Registered models")
     table.add_column("name")
     table.add_column("latest version")
-    for name in ("next_pitch", "location"):
+    for name in ("next_pitch", "location", "stuff_plus", "location_plus", "pitching_plus"):
         d = s.models_dir / name
         version = latest_version(name, settings=s) if d.exists() else None
         table.add_row(name, version or "[dim]none[/dim]")

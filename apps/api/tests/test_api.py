@@ -304,3 +304,61 @@ class TestPredict:
         assert first["actual_pitch_type"]
         assert first["predicted_pitch_type"]
         assert "actual_location_class" in first
+
+
+@pytest.fixture(scope="module")
+def graded_pitcher(client: TestClient, health: dict) -> int:
+    _needs(health, "mart_pitcher_stuff")
+    rows = client.get("/stuff", params={"limit": 1, "min_pitches": 500}).json()
+    if not rows:
+        pytest.skip("no graded pitcher-seasons above the leaderboard threshold")
+    return rows[0]["mlbam_id"]
+
+
+class TestStuff:
+    """Stuff+ / Location+ / Pitching+ routes, backed by mart_pitcher_stuff."""
+
+    def test_arsenal_carries_all_three_grades_plus_a_rollup(self, client, graded_pitcher):
+        rows = client.get(f"/stuff/{graded_pitcher}").json()
+        assert rows
+        for row in rows:
+            for grade in ("stuff_plus", "location_plus", "pitching_plus"):
+                assert isinstance(row[grade], (int, float))
+        # The rollup must lead, so a caller can read a headline off row zero.
+        assert rows[0]["pitch_type"] == "ALL"
+        assert rows[0]["usage_pct"] == pytest.approx(100.0)
+
+    def test_the_rollup_covers_at_least_its_parts(self, client, graded_pitcher):
+        rows = client.get(f"/stuff/{graded_pitcher}").json()
+        season = rows[0]["season"]
+        same = [r for r in rows if r["season"] == season]
+        rollup = next(r for r in same if r["pitch_type"] == "ALL")
+        parts = [r for r in same if r["pitch_type"] != "ALL"]
+        # Pitch types below the mart's minimum are dropped, so the parts can sum
+        # to less than the whole — but never to more.
+        assert sum(p["pitches"] for p in parts) <= rollup["pitches"]
+
+    def test_unknown_pitcher_is_404_not_an_empty_list(self, client, health):
+        _needs(health, "mart_pitcher_stuff")
+        assert client.get("/stuff/1").status_code == 404
+
+    def test_leaderboard_is_sorted_by_the_requested_metric(self, client, health):
+        _needs(health, "mart_pitcher_stuff")
+        rows = client.get(
+            "/stuff", params={"metric": "location_plus", "min_pitches": 500, "limit": 20}
+        ).json()
+        if len(rows) < 2:
+            pytest.skip("not enough qualified pitchers to check ordering")
+        values = [r["location_plus"] for r in rows]
+        assert values == sorted(values, reverse=True)
+
+    def test_leaderboard_respects_the_sample_size_floor(self, client, health):
+        _needs(health, "mart_pitcher_stuff")
+        rows = client.get("/stuff", params={"min_pitches": 800, "limit": 50}).json()
+        assert all(r["pitches"] >= 800 for r in rows)
+
+    def test_an_arbitrary_metric_cannot_reach_the_order_by(self, client, health):
+        """The metric is interpolated into SQL, so the whitelist is load-bearing."""
+        _needs(health, "mart_pitcher_stuff")
+        r = client.get("/stuff", params={"metric": "pitches; DROP TABLE dim_player"})
+        assert r.status_code == 400

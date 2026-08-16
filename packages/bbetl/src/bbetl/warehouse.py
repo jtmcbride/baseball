@@ -20,6 +20,10 @@ LAKE_TABLES: dict[str, str] = {
     "dim_game": "dim_game/*.parquet",
     "dim_player_ids": "dim_player_ids/*.parquet",
     "mart_zone_profile": "mart_zone_profile/*.parquet",
+    # Written by `bb-ml stuff` (bbml.marts), not by a SQL mart — producing a row
+    # means scoring every pitch through three boosters. Registered here so a
+    # plain `bb build register` still picks it up.
+    "mart_pitcher_stuff": "mart_pitcher_stuff/*.parquet",
 }
 
 

@@ -5,6 +5,7 @@ import { MovementPlot, type MovementPoint } from "../components/MovementPlot";
 import { ReleasePlot, type ReleasePoint } from "../components/ReleasePlot";
 import { ReplayStrip } from "../components/ReplayStrip";
 import { StrikeZoneHeatmap } from "../components/StrikeZoneHeatmap";
+import { StuffPanel } from "../components/StuffPanel";
 import { VeloTrend, type VeloPoint } from "../components/VeloTrend";
 import { api, columns } from "../lib/api";
 import { useFilters } from "../store/filters";
@@ -26,6 +27,13 @@ export function PlayerPage() {
     queryKey: ["arsenal", playerId, season],
     queryFn: () => api.arsenal(playerId!, season ?? undefined),
     enabled: !!playerId && role === "pitcher",
+  });
+
+  const stuff = useQuery({
+    queryKey: ["stuff", playerId, season],
+    queryFn: () => api.stuff(playerId!, season ?? undefined),
+    enabled: !!playerId && role === "pitcher",
+    retry: false,
   });
 
   const games = useQuery({
@@ -73,6 +81,15 @@ export function PlayerPage() {
   const filtered = useMemo(
     () => (pitchType ? rows.filter((r) => r.pitch_type === pitchType) : rows),
     [rows, pitchType],
+  );
+
+  // Grades are per season and don't pool: averaging a 2016 slider with a 2025
+  // one would describe a pitch nobody threw. With no season filter, show the
+  // most recent one the pitcher has (the API already sorts newest first).
+  const stuffSeason = stuff.data?.[0]?.season;
+  const stuffRows = useMemo(
+    () => (stuff.data ?? []).filter((r) => r.season === stuffSeason),
+    [stuff.data, stuffSeason],
   );
 
   if (!playerId) {
@@ -144,6 +161,25 @@ export function PlayerPage() {
           {rows.length ? <VeloTrend points={filtered} /> : <Skeleton h={240} />}
         </section>
       </div>
+
+      {role === "pitcher" && (
+        <section className="card">
+          <h3>Pitch quality{stuffSeason ? ` · ${stuffSeason}` : ""}</h3>
+          <p className="subtitle">
+            Stuff+ grades the pitch as an object, Location+ grades where it went, Pitching+ both.
+            Click a row to filter.
+          </p>
+          {stuff.isError ? (
+            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              No graded pitches — run <code>bb-ml stuff</code>.
+            </p>
+          ) : stuffRows.length ? (
+            <StuffPanel rows={stuffRows} onSelect={setPitchType} selected={pitchType} />
+          ) : (
+            <Skeleton h={220} />
+          )}
+        </section>
+      )}
 
       {role === "pitcher" && (
         <section className="card">

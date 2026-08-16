@@ -83,6 +83,25 @@ export interface ArsenalRow {
   pct_rv: number | null;
 }
 
+/**
+ * A row of `mart_pitcher_stuff`. `pitch_type === "ALL"` is the usage-weighted
+ * rollup for the whole season, not a pitch.
+ */
+export interface StuffRow {
+  mlbam_id: number;
+  season: number;
+  pitch_type: string;
+  stuff_plus: number;
+  location_plus: number;
+  pitching_plus: number;
+  rv_per_100: number | null;
+  pitches: number;
+  usage_pct: number;
+  full_name?: string;
+}
+
+export const ALL_PITCHES = "ALL";
+
 export interface ZoneExtent {
   grid_n: number;
   x_min: number; x_max: number;
@@ -186,6 +205,8 @@ export const api = {
       `/players/${id}/profile`,
     ),
   arsenal: (id: number, season?: number) => json<ArsenalRow[]>(`/players/${id}/arsenal`, { season }),
+  stuff: (id: number, season?: number) => json<StuffRow[]>(`/stuff/${id}`, { season }),
+  stuffLeaders: (params: Record<string, unknown>) => json<StuffRow[]>("/stuff", params),
   zoneExtent: () => json<ZoneExtent>("/zones/extent"),
   zones: (id: number, role: string, metric: string, season?: number) =>
     json<ZoneGrid>(`/zones/${id}`, { role, metric, season }),

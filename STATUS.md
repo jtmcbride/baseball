@@ -1,9 +1,11 @@
 # Development bookmark
 
-**Paused:** 2026-08-15 · **Milestone 1 complete. M2 (next-pitch predictor) built,
-registered, and now visually verified end-to-end** — feature builder, both model
-heads, API routes, replay UI. A partial backfill (2015-2017 + 2025) landed and
-both models are trained on it; the full 2015-present run is still outstanding.
+**Paused:** 2026-08-16 · **M1 and M2 complete and visually verified end-to-end.
+Two M3 items pulled forward and finished: the 3D pitch trajectory (viz #6) and
+Stuff+ / Location+ / Pitching+ (model #3, the flagship analytical feature).** A
+partial backfill (2015-2017 + 2025) is what every model is currently trained on;
+the full 2015-present run was still in flight when this was written and
+everything needs retraining once it lands.
 
 Read this first in a new session, then `README.md` for how the thing works and
 `~/.claude/plans/i-m-building-an-interactive-zany-ember.md` for the full
@@ -17,17 +19,17 @@ architecture plan and the M3 backlog.
 |---|---|
 | `packages/bbcore` | Config + `Warehouse` adapter (DuckDB). Postgres impl deliberately absent — M3. |
 | `packages/bbetl` | Savant / Stats API / Chadwick clients, transforms, marts, quality suite. Complete. |
-| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, `registry.py` (versioned artifacts + optional MLflow), `bb-ml` CLI. |
-| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory` added. 12 routes total, JSON + Arrow IPC. |
-| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), **3D pitch trajectory** (viz #6, M3 pulled forward — see below). Visually verified. |
+| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, **`RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3 — see below)**, `registry.py` (versioned artifacts + optional MLflow), `marts.py`, `bb-ml` CLI. |
+| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/{id}` + `/stuff` leaderboard added. 14 routes total, JSON + Arrow IPC. |
+| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), **3D pitch trajectory** (viz #6), **pitch quality panel** (model #3). Visually verified. |
 
-**Verification status:** 92 backend Python tests (bbcore/bbetl/bbml/api) + 14
-frontend tests, `tsc --noEmit`, `ruff check`, `bb check` (data quality — all
-error-level checks pass), `bb-ml status` all pass/registered. Both models
+**Verification status:** 129 backend Python tests (bbcore/bbetl/bbml/api) + 18
+frontend tests, `tsc --noEmit`, `oxlint`, `ruff check`, `bb check` (data quality
+— all error-level checks pass), `bb-ml status` all pass/registered. Models
 retrained on the expanded 2.4M-pitch lake (see below) and saved to
-`data/models/{next_pitch,location}/`. **The rendered UI has been visually
-verified** (Playwright/Chromium screenshots, light + dark, `Tarik Skubal`) — see
-below.
+`data/models/{next_pitch,location,stuff_plus,location_plus,pitching_plus}/`.
+**The rendered UI has been visually verified** (Playwright/Chromium screenshots,
+light + dark, `Tarik Skubal`) — see below.
 
 ---
 
@@ -113,18 +115,89 @@ noticing the horizontal side was wrong — no unit test would have caught this,
 since the *shape* of the flight (which is what the physics tests check) is
 unaffected by a global mirror.
 
-Camera is fixed near the plate on the batter's box side (offset sign depends
+Camera *starts* near the plate on the batter's box side (offset sign depends
 on `stand`), aimed at the zone center, wide FOV (62°) so the pitcher and the
 zone both fit in frame — a literal at-the-eyes position can't see its own
 strike zone, so this is deliberately a few feet back, not a physically
-literal eye position. Playback is real-time physics at 4x slow motion
-(`SLOWMO` in `PitchTrajectory3D.tsx`) — real flight is ~0.4-0.5s, too fast to
-read.
+literal eye position. From there it is user-controlled (OrbitControls: drag to
+orbit, scroll to zoom). Playback defaults to real time with a speed slider down
+to 0.1x; replay resets only the ball, deliberately **not** the camera — that is
+why the animation state lives behind a ref instead of an effect dependency.
 
 Not yet done: no test drives the actual Playwright/visual check for this
 (all verification this session was manual, screenshot-and-look). If this
 regresses, `bb-ml`-style CI won't catch a coordinate-mirror bug like the one
 above — only rendering it and checking will.
+
+---
+
+## Stuff+ / Location+ / Pitching+ (2026-08-16) — M3 model #3, the flagship
+
+Built while the backfill ran. Three LightGBM regressors on ONE target, three
+disjoint feature sets: Stuff+ from physical characteristics only, Location+ from
+placement and count only, Pitching+ from both. `features/stuff.py` declares the
+sets and `assert_sets_are_disjoint()` enforces the wall between them — the whole
+value of the triple is that "elite shape, poor command" is readable as a gap
+between two numbers, and one leaked column silently turns Stuff+ into a worse
+Pitching+.
+
+**The target took more work than the models** (`features/run_value.py`).
+`delta_run_exp` straight off Savant is the wrong thing to regress on, for two
+reasons measured on our own lake:
+
+- It is a *base-out* delta, so the same strikeout is worth more with the bases
+  loaded. A stuff model can't see the base state, so that spread is pure noise.
+- Grouping it by description: every non-BIP outcome has SD 0.03-0.09, while
+  `hit_into_play` alone has SD **0.487** on 20% of pitches. Almost all of the
+  variance is one bucket, and most of that is where the ball landed.
+
+So we build the standard count-based construction from our own data — no
+imported linear weights: context-averaged event values, balls in play de-noised
+by regressing run value on `estimated_woba_using_speedangle` (rv = -0.253 +
+0.829 * xwoba), a 12-cell count run-expectancy table, and pitch RV as the
+telescoping difference. Target SD drops 0.231 -> 0.150 and, more importantly,
+`E[rv | count] == 0` at every count to 1e-5 — the count carries no run value of
+its own, so a model can't score points knowing 0-2 is a good count. Two
+consequences that look like bugs and aren't: **a two-strike foul is worth
+exactly zero**, and the per-pitch scale is tiny (±0.05).
+
+**Measured, and the numbers argue for the design:**
+
+| head | iters | test r2 | agg corr | yoy grade | yoy actual |
+|---|---|---|---|---|---|
+| Stuff+ | 77 | 0.0005 | 0.177 | **0.840** | 0.385 |
+| Location+ | 286 | 0.0382 | 0.177 | 0.629 | 0.385 |
+| Pitching+ | 247 | 0.0395 | 0.257 | 0.714 | 0.385 |
+
+- **R^2 near zero is the expected result, not a failure**, and this was checked
+  rather than assumed: 500 / 1500 / 2000 rounds and a finer booster all pushed
+  test R^2 *negative* and dropped stability 0.86 -> 0.70. The ~40-80 iteration
+  early-stopped fit is not undertrained. Don't "fix" it.
+- **Stability is the headline.** The grade says the same thing about a pitcher
+  two years running (0.84) more than twice as reliably as his own run value does
+  (0.385). That is the entire reason a stuff metric exists.
+- **Predictive validity is honest-but-unproven so far**: Stuff+ vs next season's
+  run value is 0.37 against past run value's 0.38 — level, not better. The only
+  split available is a 9-year jump (train <=2016, test 2025) across the invention
+  of the sweeper. Re-measure on a contiguous split once the backfill lands.
+- **`pitch_type` is in the Location+ set and not the Stuff+ set** — measured both
+  ways (agg corr: stuff 0.173 -> 0.164 with it, location 0.130 -> 0.175 with it).
+  It's a bare label, not a quality measurement, so it tells the location model
+  *which* pitch is being located without smuggling in how good it is.
+- Sanity check that the decomposition is real: José Soriano grades 115.2 stuff /
+  94.4 location, deGrom 114.7 / 112.4. That matches the scouting reputations, and
+  no single "pitch quality" number would show it.
+
+Scale: `100 + 10 * z`, calibrated over pitcher x season x pitch_type groups of
+100+ pitches (not over individual pitches — that would shrink every aggregate
+toward 100). Constants live in the artifact, so grades are only comparable
+within a training run.
+
+`bb-ml stuff` trains all three and rebuilds `mart_pitcher_stuff` (pitcher x
+season x pitch_type + an `ALL` rollup). That mart is written by bbml, not by a
+SQL file, because a row means scoring every pitch through three boosters; it
+reads the lake directly so it does **not** need the warehouse lock. `make train`
+runs it.
 
 ---
 
@@ -227,9 +300,12 @@ don't re-derive it.
    feature — the location model currently uses the same feature set as pitch
    type, which wasn't built with location-specific signal in mind.
 
-**Or move to M3:** live game-feed mode; `PostgresWarehouse`; models 2/3/5 (arsenal
-re-classification, Stuff+/Location+, called-strike probability); viz 6-8, 10-20;
-Retrosheet backfill.
+4. Re-run `bb-ml stuff` on the full lake and re-check predictive validity on a
+   contiguous split — the current 0.37-vs-0.38 result is not yet a conclusion.
+
+**Or move to M3:** live game-feed mode; `PostgresWarehouse`; models 2 and 5
+(arsenal re-classification, called-strike probability — model 3 is done, see
+above); viz 7-8, 10-20; Retrosheet backfill.
 
 ---
 
@@ -258,6 +334,12 @@ Retrosheet backfill.
 - **The arsenal mask defaults off** — hard-zeroing pitches outside a pitcher's
   learned arsenal made log-loss and ECE both worse; it inflates top-1 by making
   argmax cleaner while quietly ruining the probabilities the UI shows.
+- **The pitch-quality feature sets deliberately break the next-pitch leakage
+  rule.** `schema.FORBIDDEN_FEATURE_COLUMNS` bans anything describing the pitch
+  being predicted; Stuff+/Location+ are *grading a pitch already thrown*, so
+  those columns are the entire input. `auto_split(..., check_features=False)`
+  is the opt-out and it is correct — the temporal and plate-appearance checks
+  still run.
 - **MLflow uses a sqlite backend**, not the plain file store — the file store is
   in maintenance mode and now raises on `set_experiment`. Tracking URI is
   `sqlite:///data/models/mlruns/mlflow.db`.

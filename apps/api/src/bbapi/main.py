@@ -8,7 +8,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from bbapi.deps import settings, warehouse
-from bbapi.routers import pitches, players, predict, zones
+from bbapi.routers import pitches, players, predict, stuff, zones
 from bbcore.logging import setup_logging
 
 setup_logging()
@@ -44,6 +44,7 @@ def health() -> dict[str, Any]:
             "dim_player_ids",
             "mart_pitcher_arsenal",
             "mart_zone_profile",
+            "mart_pitcher_stuff",
         )
     }
     pitch_count = wh.scalar("SELECT count(*) FROM fact_pitch") if tables["fact_pitch"] else 0
@@ -70,6 +71,7 @@ app.include_router(players.router)
 app.include_router(pitches.router)
 app.include_router(zones.router)
 app.include_router(predict.router)
+app.include_router(stuff.router)
 
 
 def main() -> None:
