@@ -9,8 +9,9 @@
  *
  * Coordinate mapping: three.x = -statcast x (left/right), three.y = statcast z
  * (height, up), three.z = statcast y (distance from plate; plate at 0, rubber
- * at 60.5). The camera sits fixed near the plate and does not track the ball —
- * a real batter's head doesn't move either.
+ * at 60.5). The camera starts in a fixed batter's-eye position but is fully
+ * user-controlled from there (OrbitControls: drag to orbit, scroll to zoom,
+ * right-drag to pan) — it does not track the ball itself.
  *
  * The x negation matters: (x, y, z) -> (x, z, y) swaps two axes, which is a
  * parity-flipping transform — it silently turns Statcast's right-handed
@@ -23,6 +24,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { PitchTrajectory } from "../lib/api";
 import { familyColor, familyOf, labelOf } from "../lib/scales";
 import { PLATE_Y, reconstructFlight } from "../lib/trajectory";
@@ -30,9 +32,11 @@ import { PLATE_Y, reconstructFlight } from "../lib/trajectory";
 const PLATE_HALF_FT = 0.83;
 const RUBBER_Y = 60.5;
 const BALL_RADIUS_FT = 0.121;
-// Real flight is ~0.4-0.5s — too fast to read. Stretch it for legibility; the
-// SHAPE of the path is exact regardless of playback speed.
-const SLOWMO = 4;
+// 1 = real time (release to plate in its true ~0.4-0.5s). The slider goes
+// down from there for a slow-motion look at movement/spin — never up, since
+// real time is already the fastest a real pitch happens.
+const DEFAULT_SPEED = 1;
+const MIN_SPEED = 0.1;
 
 function cssColor(el: Element, varName: string): number {
   const raw = getComputedStyle(el).getPropertyValue(varName).trim();
@@ -67,6 +71,13 @@ export function PitchTrajectory3D({
   const containerRef = useRef<HTMLDivElement>(null);
   const [replayKey, setReplayKey] = useState(0);
   const [phase, setPhase] = useState<"flight" | "done">("flight");
+  const [speed, setSpeed] = useState(DEFAULT_SPEED);
+  // A ref, not just the `speed` state, so dragging the slider adjusts the
+  // running animation's rate in place — it must NOT be a dependency of the
+  // scene-setup effect below, or every tick of the drag would tear down and
+  // rebuild the whole WebGL scene (and reset the user's camera orbit).
+  const speedRef = useRef(DEFAULT_SPEED);
+  speedRef.current = speed;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -100,6 +111,18 @@ export function PitchTrajectory3D({
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(renderer.domElement);
+
+    // User-controlled camera: drag to orbit, scroll/pinch to zoom, right-drag
+    // (or two-finger drag) to pan. Starting orientation is the staged
+    // batter's-eye framing above; the user is free to move from there.
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, zoneMidZ, PLATE_Y);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 2;
+    controls.maxDistance = 80;
+    controls.maxPolarAngle = Math.PI * 0.49; // stop just short of going underground
+    controls.update();
 
     const gridlineColor = cssColor(container, "--gridline");
     const axisColor = cssColor(container, "--axis");
@@ -171,29 +194,43 @@ export function PitchTrajectory3D({
     scene.add(ball);
 
     let rafId = 0;
-    let startTime: number | null = null;
+    let lastFrameTime: number | null = null;
+    let tauElapsed = 0;
+    let reachedEnd = false;
     let cancelled = false;
 
+    // Runs continuously for the life of the component, not just while the
+    // ball is in flight — OrbitControls needs a render every frame to feel
+    // responsive to drag/zoom/pan, and damping needs `controls.update()`
+    // every frame too, well after the ball itself has stopped moving.
     const tick = (now: number) => {
       if (cancelled) return;
-      if (startTime === null) startTime = now;
-      const elapsedS = (now - startTime) / 1000;
-      const tau = Math.min(elapsedS / SLOWMO, flight.tauTotal);
-      const [x, y, z] = flight.positionAt(tau);
+      if (lastFrameTime === null) lastFrameTime = now;
+      const dt = (now - lastFrameTime) / 1000;
+      lastFrameTime = now;
+
+      // Accumulate physics-time rather than deriving tau from wall-clock
+      // elapsed directly, so dragging the speed slider mid-flight changes
+      // the RATE from here on rather than jumping the ball to a new tau.
+      tauElapsed = Math.min(tauElapsed + dt * speedRef.current, flight.tauTotal);
+      const [x, y, z] = flight.positionAt(tauElapsed);
       ball.position.copy(toThree(x, y, z));
 
-      if (tau >= flight.tauTotal) {
+      if (tauElapsed >= flight.tauTotal && !reachedEnd) {
+        reachedEnd = true;
         setPhase("done");
-      } else {
-        rafId = requestAnimationFrame(tick);
       }
+
+      controls.update();
       renderer.render(scene, camera);
+      rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
 
     return () => {
       cancelled = true;
       cancelAnimationFrame(rafId);
+      controls.dispose();
       renderer.dispose();
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
@@ -211,26 +248,48 @@ export function PitchTrajectory3D({
       <div ref={containerRef} style={{ width, height, borderRadius: 6, overflow: "hidden" }} />
       <figcaption
         style={{
-          display: "flex", justifyContent: "space-between", alignItems: "center",
+          display: "flex", flexDirection: "column", gap: 6,
           fontSize: 12, color: "var(--text-secondary)", marginTop: 6,
         }}
       >
-        <span>
-          {labelOf(trajectory.pitch_type)}
-          {trajectory.release_speed != null && ` · ${trajectory.release_speed.toFixed(1)} mph`}
-          {" · batter's-eye view"}
-        </span>
-        <button
-          onClick={() => { setPhase("flight"); setReplayKey((k) => k + 1); }}
-          disabled={phase === "flight"}
-          style={{
-            background: "none", border: "1px solid var(--gridline)", borderRadius: 4,
-            padding: "2px 8px", cursor: phase === "flight" ? "default" : "pointer",
-            color: "var(--text-primary)", fontSize: 11,
-          }}
-        >
-          replay
-        </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>
+            {labelOf(trajectory.pitch_type)}
+            {trajectory.release_speed != null && ` · ${trajectory.release_speed.toFixed(1)} mph`}
+            {" · drag to orbit, scroll to zoom"}
+          </span>
+          <button
+            onClick={() => { setPhase("flight"); setReplayKey((k) => k + 1); }}
+            disabled={phase === "flight"}
+            style={{
+              background: "none", border: "1px solid var(--gridline)", borderRadius: 4,
+              padding: "2px 8px", cursor: phase === "flight" ? "default" : "pointer",
+              color: "var(--text-primary)", fontSize: 11,
+            }}
+          >
+            replay
+          </button>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, color: "var(--text-muted)", whiteSpace: "nowrap" }}>speed</span>
+          <input
+            type="range"
+            min={MIN_SPEED}
+            max={DEFAULT_SPEED}
+            step={0.05}
+            value={speed}
+            onChange={(e) => setSpeed(Number(e.target.value))}
+            style={{ flex: 1 }}
+          />
+          <span
+            style={{
+              fontSize: 10, color: "var(--text-muted)", width: 36,
+              textAlign: "right", fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {(speed * 100).toFixed(0)}%
+          </span>
+        </label>
       </figcaption>
     </figure>
   );
