@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query, Response
 
 from bbapi.arrow import arrow_response, season_ttl
@@ -101,6 +103,61 @@ def get_pitches(
         },
     )
     return arrow_response(tbl, cache_seconds=season_ttl(season, settings().current_season))
+
+
+TRAJECTORY_COLUMNS = [
+    "pitch_type",
+    "pitch_name",
+    "p_throws",
+    "stand",
+    "release_speed",
+    "release_extension",
+    "release_pos_x",
+    "release_pos_y",
+    "release_pos_z",
+    "vx0",
+    "vy0",
+    "vz0",
+    "ax",
+    "ay",
+    "az",
+    "plate_x",
+    "plate_z",
+    "sz_top",
+    "sz_bot",
+]
+
+
+@router.get("/trajectory")
+def pitch_trajectory(game_pk: int, at_bat_number: int, pitch_number: int) -> dict[str, Any]:
+    """The raw 9-parameter physics fit for one pitch, keyed by its natural id.
+
+    `vx0/vy0/vz0/ax/ay/az` are Statcast's fitted constant-acceleration
+    trajectory, valid at the fixed reference y=50ft — NOT at the actual release
+    point. The client reconstructs the exact flight path (release to plate) by
+    solving the same quadratic backward from y=50 to `release_pos_y`, then
+    forward to y=17/12 (front of plate); see `PitchTrajectory3D.tsx`. Validated
+    against real `plate_x`/`plate_z` to ~0.003ft mean error before shipping —
+    do not change the y=50 or y=17/12 reference points without re-validating.
+    """
+    require_table("fact_pitch")
+    cols = ", ".join(TRAJECTORY_COLUMNS)
+    row = (
+        warehouse()
+        .execute(
+            f"""
+        SELECT {cols} FROM fact_pitch
+        WHERE game_pk = $game_pk AND at_bat_number = $at_bat_number
+          AND pitch_number = $pitch_number AND vx0 IS NOT NULL
+        LIMIT 1
+        """,
+            {"game_pk": game_pk, "at_bat_number": at_bat_number, "pitch_number": pitch_number},
+        )
+        .to_pylist()
+    )
+    if not row:
+        raise HTTPException(404, "No tracked trajectory for this pitch.")
+    return row[0]
 
 
 @router.get("/movement")

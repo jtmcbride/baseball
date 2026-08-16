@@ -8,9 +8,11 @@
  * its own outcome.
  */
 
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import type { ReplayPitch } from "../lib/api";
+import { api, type ReplayPitch } from "../lib/api";
 import { familyColor, familyOf, labelOf } from "../lib/scales";
+import { PitchTrajectory3D } from "./PitchTrajectory3D";
 
 const PLATE_HALF_FT = 0.83;
 // Matches bbml.features.schema: LOC_X_MIN/MAX, LOC_Z_MIN/MAX.
@@ -96,7 +98,7 @@ function PredictionBars({ pitch }: { pitch: ReplayPitch }) {
   );
 }
 
-function PitchCard({ pitch }: { pitch: ReplayPitch }) {
+function PitchCard({ pitch, onOpen3D }: { pitch: ReplayPitch; onOpen3D: (p: ReplayPitch) => void }) {
   const top1 = pitch.predicted_pitch_type[0];
   const correct = top1?.pitch_type === pitch.actual_pitch_type;
   return (
@@ -124,6 +126,59 @@ function PitchCard({ pitch }: { pitch: ReplayPitch }) {
       {correct && (
         <div style={{ fontSize: 9, color: "var(--text-secondary)" }}>top pick ✓</div>
       )}
+      <button
+        onClick={() => onOpen3D(pitch)}
+        style={{
+          background: "none", border: "none", padding: 0, cursor: "pointer",
+          color: "var(--text-muted)", fontSize: 10, textDecoration: "underline",
+        }}
+      >
+        fly it in 3D
+      </button>
+    </div>
+  );
+}
+
+function Trajectory3DModal({
+  gamePk, pitch, onClose,
+}: { gamePk: number; pitch: ReplayPitch; onClose: () => void }) {
+  const traj = useQuery({
+    queryKey: ["trajectory", gamePk, pitch.at_bat_number, pitch.pitch_number],
+    queryFn: () => api.trajectory(gamePk, pitch.at_bat_number, pitch.pitch_number),
+  });
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="card"
+        style={{ position: "relative" }}
+      >
+        <button
+          onClick={onClose}
+          style={{
+            position: "absolute", top: 8, right: 8, background: "none", border: "none",
+            cursor: "pointer", color: "var(--text-muted)", fontSize: 16, lineHeight: 1,
+          }}
+          aria-label="Close"
+        >
+          ✕
+        </button>
+        {traj.isLoading && <div style={{ width: 480, height: 340 }} />}
+        {traj.isError && (
+          <p style={{ width: 480, color: "var(--text-muted)", fontSize: 13 }}>
+            No tracked physics data for this pitch (older seasons or a non-tracked pitch clock
+            violation can be missing it).
+          </p>
+        )}
+        {traj.data && <PitchTrajectory3D trajectory={traj.data} />}
+      </div>
     </div>
   );
 }
@@ -145,8 +200,9 @@ function groupByAtBat(pitches: ReplayPitch[]): AtBatGroup[] {
     .map(([at_bat_number, ps]) => ({ at_bat_number, pitches: ps }));
 }
 
-export function ReplayStrip({ pitches }: { pitches: ReplayPitch[] }) {
+export function ReplayStrip({ pitches, gamePk }: { pitches: ReplayPitch[]; gamePk: number }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [selected, setSelected] = useState<ReplayPitch | null>(null);
   const atBats = groupByAtBat(pitches);
   const hits = pitches.filter((p) => p.predicted_pitch_type[0]?.pitch_type === p.actual_pitch_type).length;
 
@@ -181,13 +237,16 @@ export function ReplayStrip({ pitches }: { pitches: ReplayPitch[] }) {
                 {ab.pitches
                   .sort((a, b) => a.pitch_number - b.pitch_number)
                   .map((p) => (
-                    <PitchCard key={p.pitch_number} pitch={p} />
+                    <PitchCard key={p.pitch_number} pitch={p} onOpen3D={setSelected} />
                   ))}
               </div>
             )}
           </div>
         );
       })}
+      {selected && (
+        <Trajectory3DModal gamePk={gamePk} pitch={selected} onClose={() => setSelected(null)} />
+      )}
     </div>
   );
 }

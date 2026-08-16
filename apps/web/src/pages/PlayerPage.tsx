@@ -178,7 +178,7 @@ export function PlayerPage() {
                   No model is registered yet — run <code>bb-ml next-pitch</code>.
                 </p>
               ) : replay.data ? (
-                <ReplayStrip pitches={replay.data} />
+                <ReplayStrip pitches={replay.data} gamePk={gameForReplay!} />
               ) : (
                 <Skeleton h={160} />
               )}

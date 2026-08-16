@@ -138,6 +138,28 @@ export interface PredictedLocation {
   probability: number;
 }
 
+export interface PitchTrajectory {
+  pitch_type: string | null;
+  pitch_name: string | null;
+  p_throws: string;
+  stand: string;
+  release_speed: number | null;
+  release_extension: number | null;
+  release_pos_x: number;
+  release_pos_y: number;
+  release_pos_z: number;
+  vx0: number;
+  vy0: number;
+  vz0: number;
+  ax: number;
+  ay: number;
+  az: number;
+  plate_x: number;
+  plate_z: number;
+  sz_top: number;
+  sz_bot: number;
+}
+
 export interface ReplayPitch {
   at_bat_number: number;
   pitch_number: number;
@@ -176,6 +198,12 @@ export const api = {
     json<GameSummary[]>(`/players/${id}/games`, { season, limit: 25 }),
   replay: (gamePk: number, pitcherId: number) =>
     json<ReplayPitch[]>(`/games/${gamePk}/replay`, { pitcher_id: pitcherId }),
+  trajectory: (gamePk: number, atBatNumber: number, pitchNumber: number) =>
+    json<PitchTrajectory>("/pitches/trajectory", {
+      game_pk: gamePk,
+      at_bat_number: atBatNumber,
+      pitch_number: pitchNumber,
+    }),
 };
 
 /** Materialize selected Arrow columns as plain JS objects for chart code. */

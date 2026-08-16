@@ -18,14 +18,14 @@ architecture plan and the M3 backlog.
 | `packages/bbcore` | Config + `Warehouse` adapter (DuckDB). Postgres impl deliberately absent — M3. |
 | `packages/bbetl` | Savant / Stats API / Chadwick clients, transforms, marts, quality suite. Complete. |
 | `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, `registry.py` (versioned artifacts + optional MLflow), `bb-ml` CLI. |
-| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games` added. 11 routes total, JSON + Arrow IPC. |
-| `apps/web` | Filter bar, player search, 4 charts, arsenal table, **at-bat replay strip** (viz #9). **Never visually inspected** — see gap below. |
+| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory` added. 12 routes total, JSON + Arrow IPC. |
+| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), **3D pitch trajectory** (viz #6, M3 pulled forward — see below). Visually verified. |
 
 **Verification status:** 92 backend Python tests (bbcore/bbetl/bbml/api) + 14
 frontend tests, `tsc --noEmit`, `ruff check`, `bb check` (data quality — all
 error-level checks pass), `bb-ml status` all pass/registered. Both models
 retrained on the expanded 2.4M-pitch lake (see below) and saved to
-`data/models/{next_pitch,location}/`. **The rendered UI has now been visually
+`data/models/{next_pitch,location}/`. **The rendered UI has been visually
 verified** (Playwright/Chromium screenshots, light + dark, `Tarik Skubal`) — see
 below.
 
@@ -69,6 +69,62 @@ no visual issues to report there.
 Both dev servers are running (`localhost:8000` API — restarted with `--reload`
 this session so future backend edits hot-reload, `localhost:5173` UI,
 unchanged). `make dev` will also work from a clean start.
+
+---
+
+## 3D pitch trajectory (2026-08-16) — viz #6 pulled forward from M3
+
+Built while the full backfill ran in the background. New `GET
+/pitches/trajectory?game_pk=&at_bat_number=&pitch_number=` (`pitches.py`)
+returns one pitch's raw 9-parameter physics fit — `vx0/vy0/vz0/ax/ay/az` plus
+`release_pos_x/y/z`, `sz_top/sz_bot`, `plate_x/plate_z` — straight off
+`fact_pitch` (these columns were already in the lake, just never exposed by
+an API route). `lib/trajectory.ts`'s `reconstructFlight()` does the actual
+reconstruction client-side; `PitchTrajectory3D.tsx` (vanilla Three.js, no
+react-three-fiber — matches the hand-rolled-SVG style of the other charts)
+animates it from a fixed near-batter camera. Triggered by a "fly it in 3D"
+link on every pitch card in the at-bat replay strip.
+
+**The physics is exact, not approximate — this took real validation, not
+just "the numbers look plausible":**
+- `vx0/vy0/vz0/ax/ay/az` are valid at Statcast's fixed y=50ft reference, **not
+  at the actual release point** (`release_pos_y`, typically ~54ft). Naively
+  animating from `release_pos_*` using `vx0` etc. directly draws the wrong
+  curve.
+- Fix: solve the same quadratic backward from y=50 to `release_pos_y` to get
+  velocity *at* release, then integrate forward from there to `y=17/12`
+  (front of the plate — confirmed empirically to be where Savant's own
+  `plate_x`/`plate_z` are measured, not `y=0`).
+- Validated against 200 real pitches: mean error ~0.003ft on both `plate_x`
+  and `plate_z`. Locked in as a regression test on **both** sides —
+  `TestTrajectory` in `apps/api/tests/test_api.py` and
+  `trajectory.test.ts` in the frontend, against the same real pitch. Don't
+  change the y=50 or y=17/12 reference points without re-validating both.
+
+**A genuine bug caught by visual verification, not by either test suite:**
+`toThree(x,y,z) = Vector3(x,z,y)` swaps two axes, which silently flips
+handedness (right-handed Statcast → left-handed Three.js scene) — Three.js
+assumes right-handed throughout, so this mirrored the whole scene left-right.
+A pitch that actually broke to the batter's right rendered as breaking left.
+Fixed by negating x (`Vector3(-x,z,y)`) and re-deriving the camera's
+batter-box offset sign to match. Caught by literally looking at where the
+ball landed relative to the strike zone box for a known-location pitch and
+noticing the horizontal side was wrong — no unit test would have caught this,
+since the *shape* of the flight (which is what the physics tests check) is
+unaffected by a global mirror.
+
+Camera is fixed near the plate on the batter's box side (offset sign depends
+on `stand`), aimed at the zone center, wide FOV (62°) so the pitcher and the
+zone both fit in frame — a literal at-the-eyes position can't see its own
+strike zone, so this is deliberately a few feet back, not a physically
+literal eye position. Playback is real-time physics at 4x slow motion
+(`SLOWMO` in `PitchTrajectory3D.tsx`) — real flight is ~0.4-0.5s, too fast to
+read.
+
+Not yet done: no test drives the actual Playwright/visual check for this
+(all verification this session was manual, screenshot-and-look). If this
+regresses, `bb-ml`-style CI won't catch a coordinate-mirror bug like the one
+above — only rendering it and checking will.
 
 ---
 

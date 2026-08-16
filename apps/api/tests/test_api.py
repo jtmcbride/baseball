@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import math
 
 import pyarrow.ipc as ipc
 import pytest
@@ -130,6 +131,92 @@ class TestArrowPayloads:
         assert "max-age=2592000" in r.headers.get("cache-control", "")
 
 
+def _solve_t(y0: float, vy0: float, ay: float, y_target: float) -> float:
+    """Time at which y(t) = y_target, given y(t) = y0 + vy0*t + 0.5*ay*t^2.
+
+    Two roots exist; the physically meaningful one for a pitch (release just a
+    few hundredths of a second from the y=50 reference, flight well under a
+    second) is always the one with the smaller magnitude.
+    """
+    a, b, c = 0.5 * ay, vy0, y0 - y_target
+    disc = b * b - 4 * a * c
+    r1 = (-b + math.sqrt(disc)) / (2 * a)
+    r2 = (-b - math.sqrt(disc)) / (2 * a)
+    return r1 if abs(r1) < abs(r2) else r2
+
+
+class TestTrajectory:
+    """The physics reconstruction the 3D pitch trajectory viz depends on."""
+
+    def test_returns_physics_params_for_a_known_pitch(self, client, health, a_pitcher):
+        _needs(health, "fact_pitch")
+        r = client.get("/pitches", params={"pitcher_id": a_pitcher, "limit": 1})
+        table = ipc.open_stream(io.BytesIO(r.content)).read_all()
+        if table.num_rows == 0:
+            pytest.skip("sampled pitcher has no pitches")
+        row = table.to_pylist()[0]
+        got = client.get(
+            "/pitches/trajectory",
+            params={
+                "game_pk": row["game_pk"],
+                "at_bat_number": row["at_bat_number"],
+                "pitch_number": row["pitch_number"],
+            },
+        )
+        if got.status_code == 404:
+            pytest.skip("sampled pitch has no tracked physics params")
+        assert got.status_code == 200
+        body = got.json()
+        for key in (
+            "vx0",
+            "vy0",
+            "vz0",
+            "ax",
+            "ay",
+            "az",
+            "release_pos_x",
+            "release_pos_y",
+            "release_pos_z",
+        ):
+            assert body[key] is not None
+
+    def test_reconstructed_flight_matches_actual_plate_crossing(self, client, health, a_pitcher):
+        """vx0/vy0/vz0/ax/ay/az are valid at y=50ft, not at release. Integrating
+        backward to release then forward to y=17/12 must land on the real
+        plate_x/plate_z Savant separately measured — that agreement is the
+        whole justification for treating this as exact, not approximate."""
+        _needs(health, "fact_pitch")
+        r = client.get("/pitches", params={"pitcher_id": a_pitcher, "limit": 50})
+        table = ipc.open_stream(io.BytesIO(r.content)).read_all()
+        checked = 0
+        for row in table.to_pylist():
+            got = client.get(
+                "/pitches/trajectory",
+                params={
+                    "game_pk": row["game_pk"],
+                    "at_bat_number": row["at_bat_number"],
+                    "pitch_number": row["pitch_number"],
+                },
+            )
+            if got.status_code != 200:
+                continue
+            b = got.json()
+            t_r = _solve_t(50.0, b["vy0"], b["ay"], b["release_pos_y"])
+            vx_r = b["vx0"] + b["ax"] * t_r
+            vy_r = b["vy0"] + b["ay"] * t_r
+            vz_r = b["vz0"] + b["az"] * t_r
+            tau = _solve_t(b["release_pos_y"], vy_r, b["ay"], 17 / 12)
+            px = b["release_pos_x"] + vx_r * tau + 0.5 * b["ax"] * tau * tau
+            pz = b["release_pos_z"] + vz_r * tau + 0.5 * b["az"] * tau * tau
+            assert abs(px - b["plate_x"]) < 0.05
+            assert abs(pz - b["plate_z"]) < 0.05
+            checked += 1
+            if checked >= 10:
+                break
+        if checked == 0:
+            pytest.skip("no tracked pitches in sample")
+
+
 class TestZones:
     def test_extent_is_self_describing(self, client):
         ext = client.get("/zones/extent").json()
@@ -209,9 +296,7 @@ class TestPredict:
         games = client.get(f"/players/{pitcher_id}/games", params={"limit": 1}).json()
         if not games:
             pytest.skip("no games found for the sampled pitcher")
-        r = client.get(
-            f"/games/{games[0]['game_pk']}/replay", params={"pitcher_id": pitcher_id}
-        )
+        r = client.get(f"/games/{games[0]['game_pk']}/replay", params={"pitcher_id": pitcher_id})
         assert r.status_code == 200
         pitches = r.json()
         assert pitches
