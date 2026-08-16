@@ -1,4 +1,4 @@
-.PHONY: help setup backfill dims marts check api web dev test lint fmt clean
+.PHONY: help setup backfill dims marts check api web dev test lint fmt clean train
 
 SEASON_START ?= 2015
 END ?= $(shell date +%F)
@@ -59,6 +59,11 @@ fmt:
 
 status:  ## Ingest progress
 	uv run bb status
+
+train:  ## Train + register both next-pitch model heads
+	uv run bb-ml next-pitch
+	uv run bb-ml location
+	uv run bb-ml status
 
 clean:  ## Drop derived data. Raw is preserved — never re-crawl.
 	rm -rf data/lake data/db
