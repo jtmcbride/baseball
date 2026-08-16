@@ -2,7 +2,8 @@
 
 **Paused:** 2026-08-16 · **Milestone 1 complete. M2 (next-pitch predictor) built
 and registered end-to-end** — feature builder, both model heads, API routes,
-replay UI. Not yet run against the full backfill.
+replay UI. A partial backfill (2015-2017 + 2025) landed and both models are
+trained on it; the full 2015-present run is still outstanding.
 
 Read this first in a new session, then `README.md` for how the thing works and
 `~/.claude/plans/i-m-building-an-interactive-zany-ember.md` for the full
@@ -20,10 +21,11 @@ architecture plan and the M3 backlog.
 | `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games` added. 11 routes total, JSON + Arrow IPC. |
 | `apps/web` | Filter bar, player search, 4 charts, arsenal table, **at-bat replay strip** (viz #9). **Never visually inspected** — see gap below. |
 
-**Verification status:** 90 backend Python tests (bbcore/bbetl/bbml) + 19 API
-tests + 14 frontend tests, `tsc --noEmit`, `ruff check`, `bb check` (data
-quality), `bb-ml status` all pass/registered. Both models trained on the
-355k-pitch working slice and saved to `data/models/{next_pitch,location}/`.
+**Verification status:** 92 backend Python tests (bbcore/bbetl/bbml/api) + 14
+frontend tests, `tsc --noEmit`, `ruff check`, `bb check` (data quality — all
+error-level checks pass), `bb-ml status` all pass/registered. Both models
+retrained on the expanded 2.4M-pitch lake (see below) and saved to
+`data/models/{next_pitch,location}/`.
 
 ---
 
@@ -45,18 +47,37 @@ may already be up; check before starting new ones.
 
 ## Current local data
 
-Still not the full backfill — the same working slice as M1.
+A background backfill for 2015-2017 landed unattended during this session (not
+launched interactively — discovered via a task-killed notification, already
+partway through when found) and has been folded into the lake alongside the
+original 2025 M1 slice. **Full 2015-present is still not done** — 2018-2024 and
+the 2025 offseason gap remain.
 
-- **355,305 pitches**, 2025-04-01 → 2025-08-05, 1,214 games, regular season only.
-- `data/raw` 76 MB · `data/lake` 130 MB · `data/db` 2 MB.
-- Marts: `mart_pitcher_arsenal` 3,235 rows; `mart_zone_profile` 4,265 grids.
+- **2,402,136 pitches** across seasons 2015, 2016, 2017, 2025 (2018-2024 missing).
+- Marts: `mart_pitcher_arsenal` 13,112 rows; `mart_zone_profile` 18,890 grids
+  (8,955 batter / 9,935 pitcher).
+- `dim_game`/`dim_player`/crosswalk rebuilt to match (32,862 games, 5,542
+  players, 129,658-row Chadwick crosswalk).
 
-Full 2015→present backfill has **not** been run. Measured cost: 6.4s per game-day
-sustained → ~3.5 hours for ~2,000 days. Resumable — safe to start and interrupt.
-**Both ML models should be retrained once it lands** — single-season numbers
-below will move, especially the location model (13.5% top-1 on 26 classes, a
-much harder problem than pitch type and the one most likely to improve with more
-seasons of history per pitcher).
+**Bug found and fixed while building this:** `enrich()` crashed with `division
+with 'String' datatypes is not allowed`. On any day where a physics column
+(release speed, movement, `sz_top`/`sz_bot`, `spin_axis`, etc.) was entirely
+null for every pitch that day, polars' CSV reader infers `String` rather than
+`Float64` for that file — nothing numeric to infer from. `diagonal_relaxed`
+concat across a season's ~180 day-files then upcasts the whole column to
+`String` the moment one file disagrees. Fixed by pinning ~40 measurement
+columns in `SCHEMA_OVERRIDES` (`savant.py`), not just the two that happened to
+trigger the crash — the same failure would recur for any future all-null day on
+an unpinned column. All error-level `bb check` checks pass post-fix.
+
+Full 2015→present backfill (2018-2024 + rest of 2025) is still outstanding.
+Measured cost: 6.4s per game-day sustained. Resumable — safe to start and
+interrupt; `bb ingest statcast` will pick up where the manifest left off.
+**Retrain both models again once it lands** — the current numbers below were
+already retrained once (on 2015-16→17→25) and moved a lot from the single-season
+baseline; a full decade will move them further, especially the location model
+(13.6% top-1 on 26 classes barely moved between the two runs so far, suggesting
+it's not history-starved the way pitch-type prediction is).
 
 ---
 
@@ -69,7 +90,12 @@ it landed.
 
 ---
 
-## Model numbers (single-season slice, train Apr1-Jun3 / val Jun4-17 / test Jun18-Aug5)
+## Model numbers
+
+Two runs so far — numbers moved a lot between them, which is itself informative.
+
+**Run 1 — single 2025 slice** (train Apr1-Jun3 / val Jun4-17 / test Jun18-Aug5,
+same season throughout):
 
 | model | log_loss | top1 | ece |
 |---|---|---|---|
@@ -78,10 +104,33 @@ it landed.
 | next-pitch + personalized blend | 1.2840 | 0.460 | 0.0061 |
 | location (26-class grid) | 2.9572 | 0.135 | - |
 
+**Run 2 — current, multi-season** (train 2015-16 / val 2017 / test 2025 — an
+8-year gap, forced by `auto_split` since those are the only 4 seasons present):
+
+| model | log_loss | top1 | ece |
+|---|---|---|---|
+| baseline (per-pitcher usage) | 2.2788 | - | - |
+| next-pitch (global LightGBM) | 1.3886 | 0.434 | 0.0438 |
+| next-pitch + personalized blend | 1.3981 | 0.434 | 0.0282 |
+| location (26-class grid) | 2.9659 | 0.136 | - |
+
+The baseline got much worse across the 8-year gap (roster turnover — most 2025
+pitchers have zero 2015-16 history for a pure per-pitcher lookup to use) while
+the model held up, so **improvement over baseline jumped from 5% to 39%** — a
+more convincing demonstration that the feature-based personalization
+generalizes rather than memorizes. ECE is worse (0.0438 vs 0.0193, though still
+under the 0.05 test gate) — expected, since the model is now predicting into a
+pitch-type landscape 8 years removed from training (e.g. the sweeper "ST" barely
+existed in 2015-16). **Re-run once the 2018-2024 gap fills in** and a
+contiguous/nearer split becomes possible — this split is an artifact of which
+seasons happen to be backfilled, not a deliberately chosen evaluation design.
+
 Personalization is answered in full in conversation history: one global model,
 `pitcher` deliberately not a feature, personalization via expanding-window
-per-pitch-type usage priors. Per-pitcher models measured ~20% worse. See
-`next_pitch.py` module docstring for the full writeup — don't re-derive it.
+per-pitch-type usage priors. Per-pitcher models measured ~20% worse on the
+single-season run, and the multi-season run's baseline collapse only reinforces
+that conclusion. See `next_pitch.py` module docstring for the full writeup —
+don't re-derive it.
 
 ---
 
@@ -149,6 +198,16 @@ Retrosheet backfill.
   result — without it, every prior comes out null in live inference because the
   pending pitch's own indicator is null. Caught by the parity test; don't remove
   the `fill_null` while "simplifying" that function.
+- **An all-null-for-the-day column infers as `String`, not `Float64`.** Any
+  measurement column with zero non-null values in one day's raw CSV (common in
+  older seasons before a stat existed) makes polars pick `String` for that file;
+  `diagonal_relaxed` concat across a season then upcasts the whole column to
+  `String`. Every physics/measurement column must be pinned in
+  `SCHEMA_OVERRIDES` — don't assume a new Statcast field is safe to leave
+  uninferred just because recent seasons look fine.
+- **`open_warehouse` takes an exclusive DuckDB lock** — `bb build`/`bb ingest`
+  will fail with `IOException: Could not set lock` if the API server (or
+  anything else holding a `DuckDBWarehouse`) is still running. Stop it first.
 
 ## Quick sanity check after `git pull` / fresh session
 
