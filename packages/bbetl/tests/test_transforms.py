@@ -1,0 +1,170 @@
+"""Unit tests for the derived columns. These are the transforms that fail silently."""
+
+from __future__ import annotations
+
+import polars as pl
+import pytest
+
+from bbetl.transforms.statcast import enrich
+
+
+def _pitch(**overrides) -> dict:
+    base = {
+        "game_date": "2025-06-14",
+        "game_pk": 1,
+        "at_bat_number": 1,
+        "pitch_number": 1,
+        "pitch_type": "FF",
+        "description": "called_strike",
+        "p_throws": "R",
+        "stand": "R",
+        "pfx_x": -0.5,
+        "pfx_z": 1.3,
+        "api_break_x_arm": 0.5,
+        "api_break_z_with_gravity": 1.2,
+        "plate_x": 0.0,
+        "plate_z": 2.5,
+        "sz_top": 3.4,
+        "sz_bot": 1.6,
+        "balls": 1,
+        "strikes": 2,
+        "outs_when_up": 1,
+        "on_1b": None,
+        "on_2b": None,
+        "on_3b": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def frame(*rows: dict) -> pl.DataFrame:
+    return enrich(pl.DataFrame(list(rows)))
+
+
+class TestArmSideNormalization:
+    """The handedness flip. If it inverts, every movement plot is wrong and
+    nothing raises — so it gets the most direct test in the suite."""
+
+    def test_rhp_arm_side_is_positive(self):
+        # A RHP sinker runs to the arm side, which is negative pfx_x.
+        df = frame(_pitch(p_throws="R", pfx_x=-1.25, api_break_x_arm=1.25))
+        assert df["hb_arm_in"][0] == pytest.approx(15.0)
+
+    def test_lhp_arm_side_is_also_positive(self):
+        # Same pitch shape from the other side: positive pfx_x, same arm-side sign.
+        df = frame(_pitch(p_throws="L", pfx_x=1.25, api_break_x_arm=1.25))
+        assert df["hb_arm_in"][0] == pytest.approx(15.0)
+
+    def test_both_hands_agree_after_normalization(self):
+        df = frame(
+            _pitch(p_throws="R", pfx_x=-1.25, api_break_x_arm=1.25),
+            _pitch(p_throws="L", pfx_x=1.25, api_break_x_arm=1.25, pitch_number=2),
+        )
+        assert df["hb_arm_in"][0] == pytest.approx(df["hb_arm_in"][1])
+        # ...while the raw values still disagree, which is the whole point.
+        assert df["hb_in"][0] == pytest.approx(-df["hb_in"][1])
+
+    def test_falls_back_when_savant_column_is_null(self):
+        """Pre-2015 or partial rows lack api_break_x_arm; the flip must still apply."""
+        rhp = frame(_pitch(p_throws="R", pfx_x=-1.0, api_break_x_arm=None))
+        lhp = frame(_pitch(p_throws="L", pfx_x=1.0, api_break_x_arm=None))
+        assert rhp["hb_arm_in"][0] == pytest.approx(12.0)
+        assert lhp["hb_arm_in"][0] == pytest.approx(12.0)
+
+
+class TestZoneNormalization:
+    def test_top_of_zone_is_one(self):
+        df = frame(_pitch(plate_z=3.4, sz_top=3.4, sz_bot=1.6))
+        assert df["plate_z_norm"][0] == pytest.approx(1.0)
+
+    def test_bottom_of_zone_is_zero(self):
+        df = frame(_pitch(plate_z=1.6, sz_top=3.4, sz_bot=1.6))
+        assert df["plate_z_norm"][0] == pytest.approx(0.0)
+
+    def test_normalization_makes_tall_and_short_hitters_comparable(self):
+        """The reason this column exists: identical relative location, different
+        absolute height."""
+        tall = frame(_pitch(plate_z=3.3, sz_top=3.6, sz_bot=1.8))
+        short = frame(_pitch(plate_z=2.75, sz_top=3.0, sz_bot=1.5))
+        assert tall["plate_z_norm"][0] == pytest.approx(short["plate_z_norm"][0], abs=0.02)
+
+    def test_degenerate_zone_yields_null_not_infinity(self):
+        df = frame(_pitch(sz_top=2.0, sz_bot=2.0))
+        assert df["plate_z_norm"][0] is None
+
+
+class TestOutcomeFlags:
+    def test_foul_tip_is_contact_not_a_whiff(self):
+        """Counting foul tips as whiffs inflates whiff rate ~1pp. Common error."""
+        df = frame(_pitch(description="foul_tip"))
+        assert df["is_swing"][0] is True
+        assert df["is_whiff"][0] is False
+
+    @pytest.mark.parametrize("desc", ["swinging_strike", "swinging_strike_blocked", "missed_bunt"])
+    def test_whiffs(self, desc):
+        df = frame(_pitch(description=desc))
+        assert df["is_whiff"][0] is True
+        assert df["is_swing"][0] is True
+
+    def test_csw_combines_called_strikes_and_whiffs(self):
+        assert frame(_pitch(description="called_strike"))["is_csw"][0] is True
+        assert frame(_pitch(description="swinging_strike"))["is_csw"][0] is True
+        assert frame(_pitch(description="ball"))["is_csw"][0] is False
+        assert frame(_pitch(description="foul"))["is_csw"][0] is False
+
+    @pytest.mark.parametrize("desc", ["automatic_ball", "automatic_strike"])
+    def test_automatic_calls_are_not_tracked_pitches(self, desc):
+        """Pitch-clock/ABS calls carry no tracking data and must not reach a
+        model or a movement plot."""
+        df = frame(_pitch(description=desc))
+        assert df["is_tracked_pitch"][0] is False
+
+    def test_pitchout_is_tracked_but_not_competitive(self):
+        df = frame(_pitch(description="pitchout"))
+        assert df["is_tracked_pitch"][0] is True
+        assert df["is_competitive"][0] is False
+
+
+class TestZoneAndChase:
+    def test_pitch_down_the_middle_is_in_zone(self):
+        df = frame(_pitch(plate_x=0.0, plate_z=2.5))
+        assert df["is_in_zone"][0] is True
+
+    def test_pitch_off_the_plate_is_out_of_zone(self):
+        df = frame(_pitch(plate_x=1.5, plate_z=2.5))
+        assert df["is_in_zone"][0] is False
+
+    def test_chase_requires_swing_outside_zone(self):
+        chased = frame(_pitch(plate_x=1.5, description="swinging_strike"))
+        took = frame(_pitch(plate_x=1.5, description="ball"))
+        in_zone_swing = frame(_pitch(plate_x=0.0, description="swinging_strike"))
+        assert chased["is_chase"][0] is True
+        assert took["is_chase"][0] is False
+        assert in_zone_swing["is_chase"][0] is False
+
+
+class TestGameState:
+    def test_base_state_is_a_three_bit_code(self):
+        empty = frame(_pitch())
+        first = frame(_pitch(on_1b=123))
+        loaded = frame(_pitch(on_1b=1, on_2b=2, on_3b=3))
+        assert empty["base_state"][0] == 0
+        assert first["base_state"][0] == 1
+        assert loaded["base_state"][0] == 7
+
+    def test_base_out_state_spans_24_values(self):
+        loaded_two_out = frame(_pitch(on_1b=1, on_2b=2, on_3b=3, outs_when_up=2))
+        bases_empty_no_outs = frame(_pitch(outs_when_up=0))
+        assert loaded_two_out["base_out_state"][0] == 23
+        assert bases_empty_no_outs["base_out_state"][0] == 0
+
+    def test_count_state(self):
+        assert frame(_pitch(balls=3, strikes=2))["count_state"][0] == "3-2"
+
+    def test_platoon_flag(self):
+        assert frame(_pitch(stand="R", p_throws="R"))["is_platoon_same"][0] is True
+        assert frame(_pitch(stand="L", p_throws="R"))["is_platoon_same"][0] is False
+
+
+def test_enrich_is_a_noop_on_empty_input():
+    assert enrich(pl.DataFrame()).height == 0

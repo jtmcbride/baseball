@@ -1,0 +1,161 @@
+/* Design tokens.
+ *
+ * Every colour in the app resolves to one of these roles. Charts are written
+ * against roles, never raw hex, so light/dark swap in exactly one place and no
+ * component can invent its own series colour.
+ *
+ * Palette provenance: the categorical slots, sequential ramp, neutral midpoints,
+ * ink and chrome are the validated reference palette. The diverging ramp's warm
+ * arm is generated at the SAME OKLab lightness steps as the documented blue arm,
+ * so the two arms are perceptually symmetric (matched ΔL, all >= 0.06 monotone).
+ */
+
+:root {
+  color-scheme: light;
+
+  /* --- surfaces & chrome --- */
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --gridline: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+
+  /* --- categorical: pitch families ---
+   * Only THREE slots are used. The movement plot is a scatter, where any two
+   * marks can sit adjacent, so it is governed by the all-pairs CVD gate — and
+   * the reference palette clears all-pairs with its first three slots only.
+   * Individual pitch types are separated by marker shape and direct labels
+   * instead of by a fourth hue. */
+  --family-fastball: #2a78d6;
+  --family-breaking: #eb6834;
+  --family-offspeed: #1baf7a;
+
+  /* --- diverging (hot/cold) ---
+   * Nearest-midpoint step is lightest in light mode so "league average" recedes
+   * into the surface. */
+  --div-mid: #f0efec;
+  --div-cool-1: #b7d3f6;
+  --div-cool-2: #86b6ef;
+  --div-cool-3: #3987e5;
+  --div-cool-4: #256abf;
+  --div-cool-5: #184f95;
+  --div-warm-1: #f9c0bb;
+  --div-warm-2: #f1968e;
+  --div-warm-3: #d65854;
+  --div-warm-4: #b53a39;
+  --div-warm-5: #902123;
+
+  --radius: 6px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --gridline: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+
+    --family-fastball: #3987e5;
+    --family-breaking: #d95926;
+    --family-offspeed: #199e70;
+
+    /* Dark flips the anchor: the step nearest the midpoint is now the DARKEST,
+     * so "average" recedes into the dark surface instead of glowing. */
+    --div-mid: #383835;
+    --div-cool-1: #184f95;
+    --div-cool-2: #256abf;
+    --div-cool-3: #3987e5;
+    --div-cool-4: #86b6ef;
+    --div-cool-5: #b7d3f6;
+    --div-warm-1: #902123;
+    --div-warm-2: #b53a39;
+    --div-warm-3: #d65854;
+    --div-warm-4: #f1968e;
+    --div-warm-5: #f9c0bb;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --page: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --gridline: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.1);
+
+  --family-fastball: #3987e5;
+  --family-breaking: #d95926;
+  --family-offspeed: #199e70;
+
+  --div-mid: #383835;
+  --div-cool-1: #184f95;
+  --div-cool-2: #256abf;
+  --div-cool-3: #3987e5;
+  --div-cool-4: #86b6ef;
+  --div-cool-5: #b7d3f6;
+  --div-warm-1: #902123;
+  --div-warm-2: #b53a39;
+  --div-warm-3: #d65854;
+  --div-warm-4: #f1968e;
+  --div-warm-5: #f9c0bb;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.card h3 {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.card .subtitle {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Axis and gridline ink is recessive by default — the data is the figure. */
+.axis-label { fill: var(--text-muted); font-size: 10px; }
+.grid-line { stroke: var(--gridline); stroke-width: 1; }
+.axis-line { stroke: var(--axis); stroke-width: 1; }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: right; padding: 6px 8px; font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+thead th {
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border);
+}
+tbody tr + tr td { border-top: 1px solid var(--gridline); }

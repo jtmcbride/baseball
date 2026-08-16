@@ -1,0 +1,59 @@
+[project]
+name = "baseball"
+version = "0.1.0"
+description = "Interactive baseball analytics platform: Statcast pitch viz + ML"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "bbcore",
+    "bbetl",
+    "bbapi",
+]
+
+[project.optional-dependencies]
+ml = ["bbml"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "types-requests",
+]
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/api"]
+
+[tool.uv.sources]
+bbcore = { workspace = true }
+bbetl = { workspace = true }
+bbml = { workspace = true }
+bbapi = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["packages/bbcore/src", "packages/bbetl/src", "packages/bbml/src", "apps/api/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "PTH"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages", "apps/api"]
+addopts = "-q --strict-markers"
+markers = [
+    "network: hits a live external API (deselect with -m 'not network')",
+    "slow: takes more than a few seconds",
+]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true

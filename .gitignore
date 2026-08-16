@@ -1,0 +1,30 @@
+# Data lake — never commit. Regenerate with `make backfill`.
+/data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ML
+mlruns/
+*.onnx
+*.txt.model
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Env / editor
+.env
+.env.local
+.DS_Store
+.idea/
+.vscode/
