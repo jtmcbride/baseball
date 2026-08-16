@@ -224,6 +224,75 @@ def build_stuff_mart(
     console.print(f"[green]mart_pitcher_stuff: {mart.height} rows[/green]")
 
 
+@app.command("swing")
+def train_swing_path(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to 2023+.")] = None,
+    rounds: Annotated[int, typer.Option(help="Max boosting rounds.")] = 2000,
+    min_swings: Annotated[int, typer.Option(help="Batter-season qualifier.")] = 200,
+) -> None:
+    """Train the swing-path heads and report the plane-value leaderboard.
+
+    Needs `vaa_deg` in the lake — rebuild with `bb build pitches` if this errors
+    on a missing column.
+    """
+    from bbml import datasets as ds
+    from bbml.features.swing import build_swing_frame
+    from bbml.models.swing_path import (
+        ROLES,
+        SwingPathModel,
+        evaluate,
+        plane_value_by_batter,
+    )
+    from bbml.registry import save_model
+
+    frame = build_swing_frame(seasons=list(season) if season else None).sort(
+        ["game_date", "game_pk", "at_bat_number", "pitch_number"]
+    )
+    # check_features=False: this model reads the pitch AND the swing, which is
+    # the whole point — see the note in `datasets.validate`.
+    split = ds.auto_split(frame, check_features=False)
+
+    table = Table(title="swing path")
+    for col in ("head", "n", "metric", "value", "league plane"):
+        table.add_column(col, justify="right" if col != "head" else "left")
+
+    for role in ROLES:
+        model = SwingPathModel(role=role).fit(split.train, split.val, num_boost_round=rounds)
+        ev = evaluate(model, split.test)
+        headline = ("auc", ev["auc"]) if role == "whiff" else ("r2", ev["r2"])
+        table.add_row(
+            role,
+            f"{int(ev['n']):,}",
+            headline[0],
+            f"{headline[1]:.4f}",
+            f"{model.league_plane:.1f}°",
+        )
+
+        directory = save_model(
+            model,
+            f"swing_{role}",
+            params={"rounds": rounds, "best_iteration": model.best_iteration},
+            metrics={k: v for k, v in ev.items() if k != "n"},
+        )
+        console.print(f"[dim]saved {directory}[/dim]")
+
+        if role == "whiff":
+            board = plane_value_by_batter(model, split.test, min_swings=min_swings)
+            best = Table(title="swing plane value — whiffs avoided per 100 swings")
+            for col in ("batter", "season", "attack angle", "per 100"):
+                best.add_column(col, justify="right" if col != "batter" else "left")
+            for row in board.head(5).iter_rows(named=True):
+                best.add_row(
+                    str(row["batter"]),
+                    str(row["season"]),
+                    f"{row['attack_angle']:.1f}°",
+                    f"{row['plane_value_per_100']:+.2f}",
+                )
+            console.print(best)
+
+    console.print(table)
+
+
 @app.command("status")
 def status() -> None:
     """Show which model versions are registered."""
@@ -233,7 +302,15 @@ def status() -> None:
     table = Table(title="Registered models")
     table.add_column("name")
     table.add_column("latest version")
-    for name in ("next_pitch", "location", "stuff_plus", "location_plus", "pitching_plus"):
+    for name in (
+        "next_pitch",
+        "location",
+        "stuff_plus",
+        "location_plus",
+        "pitching_plus",
+        "swing_whiff",
+        "swing_contact",
+    ):
         d = s.models_dir / name
         version = latest_version(name, settings=s) if d.exists() else None
         table.add_row(name, version or "[dim]none[/dim]")

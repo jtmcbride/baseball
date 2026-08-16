@@ -1,11 +1,14 @@
 # Development bookmark
 
 **Paused:** 2026-08-16 · **M1 and M2 complete and visually verified end-to-end.
-Two M3 items pulled forward and finished: the 3D pitch trajectory (viz #6) and
-Stuff+ / Location+ / Pitching+ (model #3, the flagship analytical feature).** A
-partial backfill (2015-2017 + 2025) is what every model is currently trained on;
-the full 2015-present run was still in flight when this was written and
-everything needs retraining once it lands.
+Three M3 items pulled forward and finished: the 3D pitch trajectory (viz #6),
+Stuff+ / Location+ / Pitching+ (model #3), and the swing-path model (model #4).**
+The full 2015-2026 backfill has landed (9,202,082 pitches, contiguous) and
+every model has been retrained on it — see "Full lake rebuild + retrain" below
+for the numbers, several of which overturned earlier guesses in this file.
+Officials data (umpire per game) is also fully ingested now (11,154 games),
+unblocking model #5 (called-strike probability / framing) whenever that's
+picked up.
 
 Read this first in a new session, then `README.md` for how the thing works and
 `~/.claude/plans/i-m-building-an-interactive-zany-ember.md` for the full
@@ -19,17 +22,20 @@ architecture plan and the M3 backlog.
 |---|---|
 | `packages/bbcore` | Config + `Warehouse` adapter (DuckDB). Postgres impl deliberately absent — M3. |
 | `packages/bbetl` | Savant / Stats API / Chadwick clients, transforms, marts, quality suite. Complete. |
-| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, **`RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3 — see below)**, `registry.py` (versioned artifacts + optional MLflow), `marts.py`, `bb-ml` CLI. |
-| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/{id}` + `/stuff` leaderboard added. 14 routes total, JSON + Arrow IPC. |
-| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), **3D pitch trajectory** (viz #6), **pitch quality panel** (model #3). Visually verified. |
+| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, `RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3), **`SwingPathModel` (whiff + contact heads, matched-counterfactual `plane_value`, M3 model #4 — see below)**, `registry.py` (versioned artifacts + optional MLflow), `marts.py`, `bb-ml` CLI. |
+| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/{id}` + `/stuff` leaderboard added. 14 routes total, JSON + Arrow IPC. **No swing-path route yet** — model #4 is trained and registered but not exposed via the API or UI. |
+| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), **3D pitch trajectory** (viz #6), **pitch quality panel** (model #3). Visually verified. No swing-path surface yet. |
 
-**Verification status:** 129 backend Python tests (bbcore/bbetl/bbml/api) + 18
-frontend tests, `tsc --noEmit`, `oxlint`, `ruff check`, `bb check` (data quality
-— all error-level checks pass), `bb-ml status` all pass/registered. Models
-retrained on the expanded 2.4M-pitch lake (see below) and saved to
-`data/models/{next_pitch,location,stuff_plus,location_plus,pitching_plus}/`.
-**The rendered UI has been visually verified** (Playwright/Chromium screenshots,
-light + dark, `Tarik Skubal`) — see below.
+**Verification status:** 147 backend Python tests (bbcore/bbetl/bbml/api,
+including 18 new swing-path tests) + 18 frontend tests, `tsc --noEmit`,
+`oxlint`, `ruff check`, `bb check` (data quality — all error-level checks
+pass), `bb-ml status` all pass/registered. All seven models retrained on the
+full 9,202,082-pitch 2015-2026 lake (see "Full lake rebuild + retrain" below)
+and saved to
+`data/models/{next_pitch,location,stuff_plus,location_plus,pitching_plus,swing_whiff,swing_contact}/`.
+**The rendered UI has been visually verified** (Playwright/Chromium
+screenshots, light + dark, `Tarik Skubal`) — see below. That verification
+predates the swing-path model, which has no UI yet to verify.
 
 ---
 
@@ -201,19 +207,149 @@ runs it.
 
 ---
 
+## Full lake rebuild + retrain (2026-08-16) — the backfill landed, and it moved things
+
+The 2018-2024 gap and the 2025 offseason filled in while the swing-path model
+(below) was being built. Rebuilt the lake and retrained everything on it —
+9,202,082 pitches, seasons 2015-2026 contiguous, no gap. This also added
+`vaa_deg`/`haa_deg` (pitch vertical/horizontal approach angle at the plate,
+solved from the 9-parameter physics fit rather than read off the y=50
+reference — see `bbetl.transforms.statcast` for why the shortcut reports the
+angle 48ft early and flattens every pitch) and `plate_z_norm` where needed —
+`swing_path.py`'s feature set depends on both.
+
+**Next-pitch — the prior run's ECE regression was a split artifact, not a
+calibration problem:**
+
+| | 8-year-gap split (old) | full contiguous lake (now) |
+|---|---|---|
+| baseline log-loss | 2.2788 | 1.8326 |
+| model log-loss | 1.3886 | 1.2973 |
+| top-1 | 0.434 | 0.443 |
+| ECE | 0.0438 | 0.0131 |
+| ECE + personalized blend | 0.0282 | 0.0034 |
+
+Calibration recovered 3.3x. The model was never miscalibrated — it was being
+scored against a pitch-type landscape 8 years removed from its training data
+(the old split trained on 2015-16, tested on 2025, because those were the only
+seasons backfilled at the time). 29% better than baseline on a fair split.
+
+**Location model — this retracts a claim earlier in this file.** Top-1 went
+0.136 -> **0.159** (+2.3pp) on 6.7M training rows, up from a run that trained on
+a fraction of that. The "Current local data" section used to say the location
+model's top-1 "barely moved between the two runs, suggesting it's not
+history-starved" — that inference was wrong; it was history-starved, just like
+next-pitch. Corrected here rather than left for someone to re-trust later.
+
+**Pitch quality — Stuff+ especially:**
+
+| head | agg corr (partial -> full) | yoy stability (partial -> full) |
+|---|---|---|
+| Stuff+ | 0.177 -> 0.258 | 0.840 -> 0.864 |
+| Location+ | 0.177 -> 0.200 | 0.629 -> 0.663 |
+| Pitching+ | 0.257 -> 0.368 | 0.714 -> 0.745 |
+
+Stuff+ is now 2.24x more stable year-to-year than the run value it grades
+(0.864 vs the ~0.385 yoy stability of raw run value itself).
+
+**Still open:** `predictive_validity` (Stuff+ vs next season's run value on a
+contiguous split — the one open question flagged when model #3 shipped) is
+computed in the training script but isn't actually persisted anywhere durable.
+`save_model` only forwards metrics to MLflow, which isn't installed in this
+environment (`registry.py` warns and continues), so the number is printed to
+the console and then gone. The artifact-on-disk docstring claims "the artifact
+on disk is the source of truth"; for metrics that isn't true yet. Fix is a
+small one — write a `metrics.json` beside each artifact in `save_model` — and
+it hasn't been done. Do that before trying to answer the contiguous-split
+predictive-validity question for real.
+
+Officials data (`bb ingest officials`, per-game home-plate umpire from the
+Stats API boxscore) also finished during this session: **11,154 games**, full
+coverage. Unblocks model #5 (called-strike probability -> catcher framing runs
++ umpire zone maps) whenever that gets picked up — see the plan already worked
+out for it (below, and in the assistant's memory for this project).
+
+An exploratory zone-expansion-by-count analysis was built and published as a
+standalone artifact ("The Elastic Strike Zone") using a partial officials
+sample (92 umpires, ~6,300 games ingested at the time) — headline: the
+called-strike zone's *size*, not just its center, changes by count (122% of
+rulebook in a 2-0 count, 34% in 0-2), and on the selection-controlled
+borderline band strike rate swings 2.1x by count (30.5% -> 64.9%). The
+per-umpire cut in that artifact is stale now that officials data is complete
+(11,154 vs ~6,300 games) — queued to re-run, not yet done.
+
+---
+
+## Swing-path model (2026-08-16) — M3 model #4: is this batter's plane good against what he actually sees?
+
+`features/swing.py` + `models/swing_path.py`. The finding it's built on,
+measured on 1.04M tracked swings (2023H2-2026): whiff rate by swing plane
+(attack angle) against pitch descent angle (approach angle) is a strong
+*interaction*, not two main effects — a steep uppercut whiffs 11.6% against
+flat pitches and 57.8% against steep ones (5x), while a flat swing runs the
+opposite direction. A swing plane is not good or bad in itself; it is good or
+bad against a particular pitch. See the module docstring for the full table.
+
+**Two models, same swing frame:**
+- `whiff` — P(whiff | swing), AUC **0.896**. Where nearly all of the geometry
+  effect lives.
+- `contact` — E[xwOBA | contact], R² **0.080**. Same interaction, much weaker,
+  as the finding above predicts (contact quality varies less by plane/pitch
+  match than whether contact happens at all).
+
+**`plane_value` is a counterfactual, not a per-batter average**, because a raw
+average can't separate "his plane suits the pitches he sees" from "he sees
+flatter pitches" — pitch selection and pitcher quality are baked into any raw
+number. Each swing is scored twice against the *same pitch*: once at the
+batter's actual attack angle, once at a **matched league-median swing**, with
+location/count/pitch type held fixed as controls (needed, or the whole result
+would read as "uppercuts miss low breaking balls" — a location fact, not a
+geometry one).
+
+**A real bug was caught here, not just a design choice measured both ways.**
+The first version of the counterfactual swapped only `attack_angle` to the
+league median and froze bat speed / swing tilt / contact point at the
+individual hitter's own values. That isn't a real swing: a 25-degree
+attack-angle hitter meets the ball in a measurably different place than a
+9-degree one (mean contact point +2.5in pull-side vs -7.0in), and "9-degree
+attack angle with a 25-degree hitter's contact point" barely exists in
+training data. The model was extrapolating into that gap, and on real held-out
+data it returned the **wrong sign** — `plane_value` averaged -0.013 (t≈-7,
+n=2,512, not sampling noise) on a slice where the raw whiff-rate gap is
+unambiguous (11.2% vs 21.6%, every season 2023-2026) — caught by
+`test_plane_value_is_positive_when_the_plane_helps`, which is pinned against
+real data rather than a synthetic fixture for exactly this reason.
+
+**Fix:** `matched_neutral` — small single-feature auxiliary regressors
+(`CORRELATED_SWING_FEATURES` ~ `attack_angle`), fit once at training time and
+evaluated at `league_plane`, give the reference swing the bat speed/tilt/contact
+point a *typical* league-median-attack-angle swing actually has, instead of the
+individual hitter's own. Recovers `plane_value = +0.092` (t≈28) on the same
+slice — matches the raw effect. The 120-round test fixture also wasn't enough
+model capacity to resolve this interaction reliably; bumped to 600 (measured:
+still wrong sign at 120 and 300 rounds, stable and correct by 600).
+
+**Also corrected while building this:** this file's gotchas section long said
+swing path is 2025+. It's **2023H2+** — Savant backfilled it (rollout: 0%
+before July 2023, 62% that month, ~95% after; attack-angle mean 8.2-8.5°, bat
+speed 70.9-71.3mph, stable across all four seasons). That's ~4x the training
+data. Fixed in the gotchas list below.
+
+Not yet done: no API route, no UI panel. `bb-ml swing` trains and registers
+both heads and prints a plane-value leaderboard; that's as far as it goes today.
+
+---
+
 ## Current local data
 
-A background backfill for 2015-2017 landed unattended during this session (not
-launched interactively — discovered via a task-killed notification, already
-partway through when found) and has been folded into the lake alongside the
-original 2025 M1 slice. **Full 2015-present is still not done** — 2018-2024 and
-the 2025 offseason gap remain.
-
-- **2,402,136 pitches** across seasons 2015, 2016, 2017, 2025 (2018-2024 missing).
-- Marts: `mart_pitcher_arsenal` 13,112 rows; `mart_zone_profile` 18,890 grids
-  (8,955 batter / 9,935 pitcher).
-- `dim_game`/`dim_player`/crosswalk rebuilt to match (32,862 games, 5,542
-  players, 129,658-row Chadwick crosswalk).
+- **9,202,082 pitches**, seasons 2015-2026, contiguous — the full backfill
+  finally landed (see above). No more season gaps.
+- Marts: `mart_pitcher_stuff` 40,539 rows (pitcher x season x pitch_type + an
+  `ALL` rollup). `mart_pitcher_arsenal` / `mart_zone_profile` not re-counted
+  this session — re-run `bb check --coverage` before trusting the old figures
+  below.
+- Officials: **11,154 games** with a home-plate umpire (`bb ingest
+  officials`), full coverage.
 
 **Bug found and fixed while building this:** `enrich()` crashed with `division
 with 'String' datatypes is not allowed`. On any day where a physics column
@@ -226,29 +362,37 @@ columns in `SCHEMA_OVERRIDES` (`savant.py`), not just the two that happened to
 trigger the crash — the same failure would recur for any future all-null day on
 an unpinned column. All error-level `bb check` checks pass post-fix.
 
-Full 2015→present backfill (2018-2024 + rest of 2025) is still outstanding.
-Measured cost: 6.4s per game-day sustained. Resumable — safe to start and
-interrupt; `bb ingest statcast` will pick up where the manifest left off.
-**Retrain both models again once it lands** — the current numbers below were
-already retrained once (on 2015-16→17→25) and moved a lot from the single-season
-baseline; a full decade will move them further, especially the location model
-(13.6% top-1 on 26 classes barely moved between the two runs so far, suggesting
-it's not history-starved the way pitch-type prediction is).
+The backfill is now complete (see "Full lake rebuild + retrain" above) — this
+paragraph's cost/resumability notes are kept for the ingest machinery itself
+(measured 6.4s per game-day sustained, resumable via `bb ingest statcast`
+picking up where the manifest left off), useful if a future re-ingest is ever
+needed, but there is no gap left to fill right now.
 
 ---
 
 ## Committed
 
-`git log`: two commits — M1 (`6e0d555`) and the M2 model package
-(`67e2e16`). The M2 API/frontend work from this session (predict router, replay
-UI, registry) is staged for the next commit — check `git status` before assuming
-it landed.
+`git log` (newest first): M3 model #3 (`f979595`), 3D pitch trajectory work
+(`4b77e20`/`d3d9c2f`/`782a5b5`), the zstd Arrow fix (`cbf07a8`), an earlier
+STATUS.md update (`4694c91`), the schema-overrides fix (`20d776b`), `make
+train` (`3455af5`), M2 (`00d8ad9`), the first bbml package (`67e2e16`), and M1
+(`6e0d555`). This session's work — `vaa_deg`/`haa_deg` in the transform layer,
+the swing-path model (model #4) and its matched-counterfactual fix, and this
+STATUS.md update — lands in the commit right after this one; check `git log`
+rather than trusting this list to stay current.
 
 ---
 
 ## Model numbers
 
-Two runs so far — numbers moved a lot between them, which is itself informative.
+Three runs so far — numbers moved a lot between them, which is itself
+informative. See "Full lake rebuild + retrain" above for the run-2 -> run-3
+comparison and what it settled (the ECE regression was a split artifact, not
+a calibration problem; the location model was history-starved after all).
+Run 3's contiguous split (train up through some cutoff / val / test on the
+most recent season) is the first fair evaluation — re-run `bb-ml next-pitch`
+and pull the exact split boundaries from its output before quoting them
+precisely; the headline deltas are recorded above.
 
 **Run 1 — single 2025 slice** (train Apr1-Jun3 / val Jun4-17 / test Jun18-Aug5,
 same season throughout):
@@ -292,20 +436,34 @@ don't re-derive it.
 
 ## Resume paths
 
-**Finish M2 properly:**
+**M2 is done.** Both items that used to sit here are resolved:
 1. ~~Visually verify the replay UI~~ — done 2026-08-15, see above.
-2. Run the full backfill, retrain both models (`bb-ml next-pitch`, `bb-ml
-   location`), see if the location model's 13.5% top-1 improves with more data.
-3. Consider a location arsenal-style prior (where a pitcher tends to miss) as a
-   feature — the location model currently uses the same feature set as pitch
-   type, which wasn't built with location-specific signal in mind.
+2. ~~Run the full backfill, retrain~~ — done 2026-08-16, see "Full lake
+   rebuild + retrain" above. Location model's top-1 did improve with more
+   data (0.136 -> 0.159); the "not history-starved" guess in an earlier
+   version of this file was wrong.
 
-4. Re-run `bb-ml stuff` on the full lake and re-check predictive validity on a
-   contiguous split — the current 0.37-vs-0.38 result is not yet a conclusion.
+Still open from that list:
+- Consider a location arsenal-style prior (where a pitcher tends to miss) as a
+  feature — the location model currently uses the same feature set as pitch
+  type, which wasn't built with location-specific signal in mind.
+- Fix `save_model` to persist a `metrics.json` beside each artifact (MLflow
+  isn't installed here, so metrics currently evaporate — see "Full lake
+  rebuild + retrain" above), then answer the Stuff+ predictive-validity
+  question on a proper contiguous split.
 
-**Or move to M3:** live game-feed mode; `PostgresWarehouse`; models 2 and 5
-(arsenal re-classification, called-strike probability — model 3 is done, see
-above); viz 7-8, 10-20; Retrosheet backfill.
+**M3, in progress:** model #3 (Stuff+/Location+/Pitching+) and model #4
+(swing-path) are both done — see above for both. Model #4 has no API route or
+UI panel yet; that's the fastest next win if the goal is a shippable feature
+rather than a new model. Model #5 (called-strike probability -> catcher
+framing + umpire zone maps) is fully scoped and ready to start now that
+officials data is complete — the plan is written up in the assistant's
+project memory (`baseball-model5-called-strike-plan`), not re-derived here to
+avoid drift between two copies. Also queued: re-run the zone-expansion
+umpire analysis with the complete 11,154-game officials data (the published
+artifact used a partial 92-umpire sample). Still not started: live game-feed
+mode, `PostgresWarehouse`, model #2 (arsenal re-classification), viz 7-8,
+10-20, Retrosheet backfill.
 
 ---
 
@@ -352,13 +510,24 @@ above); viz 7-8, 10-20; Retrosheet backfill.
   trailing window; append-only ingest goes stale invisibly.
 - **Statcast's `umpire` column is empty in every season.** Umpires come from the
   Stats API boxscore (`bb ingest officials`), one request per game — needed for
-  the framing/called-strike models, skipped so far.
+  the framing/called-strike models. Fully ingested now (11,154 games, model #5
+  ready to start).
 - **DuckDB persists a view's resolved schema.** Rebuilding the lake with a changed
   column set leaves stale views that fail confusingly. `build pitches` now
   re-registers automatically; keep it that way.
-- **Bat tracking is 2024+, swing path 2025+.** Nullable across the whole lake.
-  `bb check --coverage` reports per-season availability — read it rather than
-  assuming.
+- **Bat tracking / swing path is 2023H2+, not 2025+ as this file used to
+  claim.** Savant backfilled it (0% before July 2023, 62% that month, ~95%
+  after — attack angle and bat speed distributions stable across all four
+  seasons since). That wrong assumption would have cost ~4x the training data
+  if it had gone unchecked into `swing_path.py`. Nullable before 2023H2 and
+  still nullable per-row after. `bb check --coverage` reports per-season
+  availability — read it rather than assuming.
+- **A single-feature counterfactual that freezes correlated features at their
+  actual values can flip sign on real data**, not just add noise — see the
+  swing-path `matched_neutral` fix above. If a future counterfactual metric
+  perturbs one feature while holding others fixed at an individual's own
+  values, check whether those held-fixed features are themselves correlated
+  with the perturbed one before trusting the sign.
 - **`_prior_sum` needs `fill_null(0)` on the counted expression**, not just on the
   result — without it, every prior comes out null in live inference because the
   pending pitch's own indicator is null. Caught by the parity test; don't remove

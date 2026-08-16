@@ -24,6 +24,16 @@ def _pitch(**overrides) -> dict:
         "api_break_z_with_gravity": 1.2,
         "plate_x": 0.0,
         "plate_z": 2.5,
+        "release_speed": 94.0,
+        # A generic four-seam physics fit, valid at the y=50 reference.
+        "vx0": 5.0,
+        "vy0": -135.0,
+        "vz0": -5.0,
+        "ax": -10.0,
+        "ay": 28.0,
+        "az": -15.0,
+        "release_pos_x": -1.9,
+        "release_pos_z": 5.8,
         "sz_top": 3.4,
         "sz_bot": 1.6,
         "balls": 1,
@@ -119,10 +129,61 @@ class TestOutcomeFlags:
         df = frame(_pitch(description=desc))
         assert df["is_tracked_pitch"][0] is False
 
-    def test_pitchout_is_tracked_but_not_competitive(self):
-        df = frame(_pitch(description="pitchout"))
+    @pytest.mark.parametrize("desc", ["pitchout", "intent_ball"])
+    def test_uncompetitive_pitches_are_tracked_but_not_competitive(self, desc):
+        """An intentional ball is a real, measured pitch and not an attempt to
+        get anyone out. It was missing from the exclusion set until 2026-08-16,
+        which put ~3,700 deliberate 4-11ft misses into every command metric."""
+        df = frame(_pitch(description=desc))
         assert df["is_tracked_pitch"][0] is True
         assert df["is_competitive"][0] is False
+
+
+class TestImpossibleTracking:
+    """Quarantine of corrupt tracking records.
+
+    Bounds reject impossibility, not unusualness — the tests pin both sides,
+    because a guard tight enough to catch a real lob would be worse than none.
+    """
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("release_speed", 21.7),  # slower than a ball can reach the plate
+            ("release_speed", 120.0),  # faster than anyone has thrown
+            ("plate_x", 35.0),  # in the stands
+            ("plate_z", -57.6),  # underground
+            ("release_pos_z", -3.2),  # released below ground level
+            ("release_pos_z", 11.4),  # released 11ft in the air
+            ("release_pos_x", 18.0),  # released off the mound entirely
+        ],
+    )
+    def test_impossible_measurements_are_not_tracked(self, field, value):
+        df = frame(_pitch(**{field: value}))
+        assert df["is_tracked_pitch"][0] is False
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("plate_x", 11.3),  # a real intentional ball
+            ("release_speed", 30.0),  # a real position-player lob
+            ("plate_z", -1.0),  # a real pitch spiked in front of the plate
+        ],
+    )
+    def test_extreme_but_real_measurements_survive(self, field, value):
+        df = frame(_pitch(**{field: value}))
+        assert df["is_tracked_pitch"][0] is True
+
+    def test_a_missing_measurement_is_not_impossible(self):
+        """Older seasons have whole columns unpopulated; null is absence."""
+        df = frame(_pitch(release_speed=None, release_pos_x=None, release_pos_z=None))
+        assert df["is_tracked_pitch"][0] is True
+
+    def test_a_quarantined_pitch_still_occupies_its_row(self):
+        """It moved the count, so deleting it would corrupt the sequence."""
+        df = frame(_pitch(plate_z=-57.6, description="ball"))
+        assert df.height == 1
+        assert df["is_tracked_pitch"][0] is False
 
 
 class TestZoneAndChase:
@@ -168,3 +229,43 @@ class TestGameState:
 
 def test_enrich_is_a_noop_on_empty_input():
     assert enrich(pl.DataFrame()).height == 0
+
+
+class TestApproachAngles:
+    """VAA/HAA are reconstructed, not shipped by Savant, and feed the swing-path
+    model. They are also the third home of the y=50 / y=17/12 constants, so the
+    ordering assertions here are what catch a reference-point drift."""
+
+    def test_four_seam_vaa_is_shallow_and_negative(self):
+        # Descending, but the flattest thing anyone throws.
+        df = frame(_pitch())
+        assert df["vaa_deg"][0] == pytest.approx(-4.87, abs=0.05)
+
+    def test_a_curveball_approaches_more_steeply_than_a_fastball(self):
+        """The single most useful sanity check on this column. If the y=50
+        reference is ever mistaken for the release point, every pitch flattens
+        toward the same angle and this ordering collapses."""
+        fastball = frame(_pitch())["vaa_deg"][0]
+        curve = frame(_pitch(vy0=-100.0, vz0=-3.0, az=-28.0, ay=22.0, release_speed=79.0))[
+            "vaa_deg"
+        ][0]
+        assert curve < fastball
+        assert curve < -8.0
+
+    def test_the_angle_is_taken_at_the_plate_not_at_the_reference(self):
+        """atan2(vz0, |vy0|) at y=50 is the shortcut this must not be. Gravity
+        has 48 more feet to act, so the true angle is meaningfully steeper."""
+        import math
+
+        naive = math.degrees(math.atan2(-5.0, 135.0))
+        assert frame(_pitch())["vaa_deg"][0] < naive - 2.0
+
+    def test_haa_sign_follows_horizontal_velocity(self):
+        assert frame(_pitch(vx0=5.0))["haa_deg"][0] > 0
+        assert frame(_pitch(vx0=-5.0))["haa_deg"][0] < 0
+
+    def test_a_corrupt_fit_yields_null_rather_than_infinity(self):
+        """ay=0 divides by zero; a trajectory that never reaches the plate has a
+        negative discriminant. Neither may produce an inf that poisons a mean."""
+        assert frame(_pitch(ay=0.0))["vaa_deg"][0] is None
+        assert frame(_pitch(vy0=-1.0, ay=28.0))["vaa_deg"][0] is None

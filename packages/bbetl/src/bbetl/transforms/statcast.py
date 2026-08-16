@@ -14,6 +14,11 @@ silently wrong.
 `plate_z` is not comparable between a 5'6" and a 6'7" hitter, and Savant's `zone`
 field (1-9, 11-14) is far too coarse for a real heatmap. Normalizing is what makes
 hot/cold maps mean anything across players.
+
+`vaa_deg` / `haa_deg` — the pitch's approach angles where it crosses the plate.
+Savant does not ship these; they have to be reconstructed from the 9-parameter
+physics fit, and they are what makes the swing-path work possible at all — a
+swing plane is only good or bad relative to the plane of the pitch it meets.
 """
 
 from __future__ import annotations
@@ -56,7 +61,101 @@ CALLED_STRIKE_DESCRIPTIONS = frozenset({"called_strike"})
 NON_PITCH_DESCRIPTIONS = frozenset({"automatic_ball", "automatic_strike"})
 
 # Non-competitive pitches: intentional balls and pitchouts distort usage rates.
-NON_COMPETITIVE_DESCRIPTIONS = frozenset({"pitchout"})
+#
+# `intent_ball` was missing here until 2026-08-16 despite the comment above
+# naming it — a real bug, not a judgment call. It let ~3,700 intentional balls
+# into every competitive-filtered model, mart, and zone grid, at plate_x values
+# of 4-11 feet because the catcher stands up and the pitcher lobs it. Those are
+# genuine locations and exactly the ones no command metric should be graded on.
+NON_COMPETITIVE_DESCRIPTIONS = frozenset({"pitchout", "intent_ball"})
+
+# --- physically impossible tracking -----------------------------------------
+#
+# Bounds chosen to catch corruption and nothing else. Across the full 2015-2026
+# lake (9.2M pitches) exactly 11 rows fall outside them, and every one is
+# unambiguous garbage: release points below ground level or 11ft in the air,
+# `hit_into_play` recorded at plate_x = 25ft, a plate_z of -57ft.
+#
+# They are deliberately far looser than the *plausible* range. An intentional
+# ball really does cross 11 feet wide of the plate and a position player really
+# does lob 30mph; the job here is rejecting impossibility, not unusualness.
+# `quality.py` owns the tighter, warn-level plausibility checks.
+MIN_RELEASE_SPEED, MAX_RELEASE_SPEED = 25.0, 108.0
+MAX_PLATE_X = 15.0
+MIN_PLATE_Z, MAX_PLATE_Z = -10.0, 20.0
+MIN_RELEASE_Z, MAX_RELEASE_Z = 0.0, 10.0
+MAX_RELEASE_X = 8.0
+
+
+def _impossible_tracking_expr() -> pl.Expr:
+    """True when a measurement is outside anything a real pitch can produce.
+
+    A NULL measurement is missing, not impossible — older seasons have whole
+    columns unpopulated and must not be quarantined for it.
+
+    Columns are cast before comparison: a day file whose measurement column is
+    null for every row reads back as Null dtype, and comparing that raises
+    rather than returning false. `SCHEMA_OVERRIDES` normally prevents it (see
+    the all-null-infers-as-String bug it was added for), but a guard that
+    crashes on absent data is the wrong failure mode for a guard.
+    """
+
+    def num(name: str) -> pl.Expr:
+        return pl.col(name).cast(pl.Float64)
+
+    checks = [
+        ~num("release_speed").is_between(MIN_RELEASE_SPEED, MAX_RELEASE_SPEED),
+        num("plate_x").abs() > MAX_PLATE_X,
+        ~num("plate_z").is_between(MIN_PLATE_Z, MAX_PLATE_Z),
+        ~num("release_pos_z").is_between(MIN_RELEASE_Z, MAX_RELEASE_Z, closed="right"),
+        num("release_pos_x").abs() > MAX_RELEASE_X,
+    ]
+    return pl.any_horizontal([c.fill_null(False) for c in checks])
+
+
+# --- approach angles ---------------------------------------------------------
+#
+# THESE TWO CONSTANTS ARE SHARED WITH THE 3D TRAJECTORY VIZ and are validated,
+# not chosen. `vx0..az` describe a constant-acceleration fit that is valid at
+# Statcast's fixed y=50ft reference, NOT at the release point; `plate_x`/`plate_z`
+# are measured where the ball crosses the FRONT of the plate at y=17/12, not at
+# y=0. Both were confirmed against 200 real pitches to ~0.003ft mean error.
+#
+# They now live in three places — here, `apps/web/src/lib/trajectory.ts`, and the
+# `TestTrajectory` regression test in `apps/api/tests/test_api.py`. Changing one
+# without the others silently produces a different geometry in each. There is a
+# test on each side pinning them against the same real pitch; keep it that way.
+Y0_REF = 50.0
+PLATE_Y = 17 / 12
+
+
+def _approach_angle_exprs() -> list[pl.Expr]:
+    """Vertical and horizontal approach angle at the plate, in degrees.
+
+    VAA is negative: the ball is descending. It is steeper for slow breaking
+    balls (~-9.5 deg for a curveball) and flattest for four-seamers (~-4.7),
+    which is the sanity check to run if this ever looks wrong.
+
+    Solved rather than approximated. Taking `atan2(vz0, |vy0|)` straight off the
+    y=50 values would report the angle 48 feet in front of the plate, before
+    gravity has done most of its work, and would flatten every pitch.
+    """
+    # A zero `ay` would be a division by zero, and a negative discriminant means
+    # the fitted trajectory never reaches the plate. Both are corrupt fits, and
+    # both should come back null rather than infinite.
+    ay_safe = pl.when(pl.col("ay") == 0).then(None).otherwise(pl.col("ay"))
+    disc = pl.col("vy0") ** 2 - 2 * pl.col("ay") * (Y0_REF - PLATE_Y)
+    # The smaller root: the first time the ball reaches the plate, not the
+    # second one the parabola offers on its way back.
+    t = pl.when(disc >= 0).then((-pl.col("vy0") - disc.sqrt()) / ay_safe).otherwise(None)
+
+    vx = pl.col("vx0") + pl.col("ax") * t
+    vy = pl.col("vy0") + pl.col("ay") * t
+    vz = pl.col("vz0") + pl.col("az") * t
+    return [
+        pl.arctan2(vz, vy.abs()).degrees().alias("vaa_deg"),
+        pl.arctan2(vx, vy.abs()).degrees().alias("haa_deg"),
+    ]
 
 
 def _base_state_expr() -> pl.Expr:
@@ -93,6 +192,8 @@ def enrich(df: pl.DataFrame) -> pl.DataFrame:
             .otherwise(pl.col("pfx_x") * 12),
         ).alias("hb_arm_in"),
         (pl.col("api_break_z_with_gravity") * 12).alias("vb_gravity_in"),
+        # --- approach angles at the plate ---
+        *_approach_angle_exprs(),
         # --- location, normalized to this batter's zone ---
         (
             (pl.col("plate_z") - pl.col("sz_bot"))
@@ -109,7 +210,14 @@ def enrich(df: pl.DataFrame) -> pl.DataFrame:
         pl.col("description").is_in(WHIFF_DESCRIPTIONS).alias("is_whiff"),
         pl.col("description").is_in(CALLED_STRIKE_DESCRIPTIONS).alias("is_called_strike"),
         (pl.col("description") == "hit_into_play").alias("is_in_play"),
-        (~pl.col("description").is_in(NON_PITCH_DESCRIPTIONS)).alias("is_tracked_pitch"),
+        # `is_tracked_pitch` means "has usable tracking", which is why a
+        # physically impossible record fails it for the same reason an automatic
+        # ball does: no pitch was measured. Both still occupy a row because they
+        # move the count, and every model, mart, chart and API route already
+        # filters on this flag — so quarantining here needs no downstream change.
+        (~pl.col("description").is_in(NON_PITCH_DESCRIPTIONS) & ~_impossible_tracking_expr()).alias(
+            "is_tracked_pitch"
+        ),
         (~pl.col("description").is_in(NON_PITCH_DESCRIPTIONS | NON_COMPETITIVE_DESCRIPTIONS)).alias(
             "is_competitive"
         ),
@@ -158,6 +266,15 @@ def build_season(season: int, *, settings: Settings | None = None) -> int:
         log.info("season %d: dropped %d duplicate pitches", season, before - df.height)
 
     df = enrich(df)
+
+    # Quarantining is silent by construction — the rows stay, they just stop
+    # being tracked — so say it out loud. A season that suddenly quarantines
+    # thousands means the feed changed, not that the data got worse.
+    quarantined = df.filter(
+        ~pl.col("description").is_in(NON_PITCH_DESCRIPTIONS) & ~pl.col("is_tracked_pitch")
+    ).height
+    if quarantined:
+        log.info("season %d: %d pitch(es) quarantined as impossible tracking", season, quarantined)
 
     out_dir = s.lake_dir / LAKE_TABLE / f"season={season}"
     if out_dir.exists():

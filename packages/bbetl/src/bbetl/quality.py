@@ -147,12 +147,65 @@ def run_checks(*, settings: Settings | None = None) -> QualityReport:
                 """
                 SELECT game_pk, at_bat_number, pitch_number, release_speed
                 FROM fact_pitch
-                WHERE release_speed IS NOT NULL
+                WHERE is_tracked_pitch
+                  AND release_speed IS NOT NULL
                   AND (release_speed < 25 OR release_speed > 108)
                 """,
                 severity="error",
                 expect_empty=True,
                 detail="Release speeds outside 25-108 mph — physically impossible, so tracking error.",
+            )
+        )
+
+        # The blind spot this suite had until 2026-08-16: velocity was range
+        # checked and location never was, so on the full lake 10 of the 11
+        # physically impossible records got through — including a pitch recorded
+        # as crossing the plate 35 feet wide and 57 feet underground. Those feed
+        # the location model's target and Location+ directly.
+        #
+        # Both checks are scoped to `is_tracked_pitch` on purpose: the transform
+        # quarantines impossible records behind that flag, and this is what
+        # verifies the quarantine actually held.
+        results.append(
+            _check(
+                wh,
+                "fact_pitch.location_physically_possible",
+                """
+                SELECT game_pk, at_bat_number, pitch_number, plate_x, plate_z,
+                       release_pos_x, release_pos_z
+                FROM fact_pitch
+                WHERE is_tracked_pitch
+                  AND (abs(plate_x) > 15 OR plate_z < -10 OR plate_z > 20
+                       OR abs(release_pos_x) > 8
+                       OR release_pos_z <= 0 OR release_pos_z > 10)
+                """,
+                severity="error",
+                expect_empty=True,
+                detail=(
+                    "Plate or release coordinates off the field entirely — tracking error. "
+                    "Bounds are loose on purpose: an intentional ball really does cross 11ft "
+                    "wide, so this is impossibility, not implausibility."
+                ),
+            )
+        )
+
+        # Visibility for the quarantine itself. It is silent by construction —
+        # the row survives, it just stops being tracked — so a feed change that
+        # started quarantining thousands would otherwise look like nothing.
+        results.append(
+            _check(
+                wh,
+                "fact_pitch.quarantine_rate",
+                """
+                SELECT season, count(*) AS quarantined
+                FROM fact_pitch
+                WHERE NOT is_tracked_pitch
+                  AND description NOT IN ('automatic_ball', 'automatic_strike')
+                GROUP BY 1 HAVING count(*) > 100
+                """,
+                severity="warn",
+                expect_empty=True,
+                detail="Seasons quarantining >100 pitches as impossible tracking — check the feed.",
             )
         )
 
