@@ -25,10 +25,13 @@ ARROW_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 
 def arrow_response(table: pa.Table, *, cache_seconds: int | None = None) -> Response:
     sink = io.BytesIO()
-    # Compress the stream: pitch data is highly repetitive across columns, and
-    # zstd typically halves it again over raw IPC.
-    options = ipc.IpcWriteOptions(compression="zstd")
-    with ipc.new_stream(sink, table.schema, options=options) as writer:
+    # No compression: apache-arrow's JS reader has no codec registered by
+    # default, so a zstd-compressed stream throws "Record batch is compressed
+    # but codec not found" client-side and every Arrow-fed chart silently
+    # fails to load (caught during visual verification — see STATUS.md).
+    # Registering a JS zstd codec would let this come back if the size ever
+    # matters enough to justify it.
+    with ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
 
     headers = {"X-Row-Count": str(table.num_rows)}

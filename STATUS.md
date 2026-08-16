@@ -1,9 +1,9 @@
 # Development bookmark
 
-**Paused:** 2026-08-16 · **Milestone 1 complete. M2 (next-pitch predictor) built
-and registered end-to-end** — feature builder, both model heads, API routes,
-replay UI. A partial backfill (2015-2017 + 2025) landed and both models are
-trained on it; the full 2015-present run is still outstanding.
+**Paused:** 2026-08-15 · **Milestone 1 complete. M2 (next-pitch predictor) built,
+registered, and now visually verified end-to-end** — feature builder, both model
+heads, API routes, replay UI. A partial backfill (2015-2017 + 2025) landed and
+both models are trained on it; the full 2015-present run is still outstanding.
 
 Read this first in a new session, then `README.md` for how the thing works and
 `~/.claude/plans/i-m-building-an-interactive-zany-ember.md` for the full
@@ -25,23 +25,50 @@ architecture plan and the M3 backlog.
 frontend tests, `tsc --noEmit`, `ruff check`, `bb check` (data quality — all
 error-level checks pass), `bb-ml status` all pass/registered. Both models
 retrained on the expanded 2.4M-pitch lake (see below) and saved to
-`data/models/{next_pitch,location}/`.
+`data/models/{next_pitch,location}/`. **The rendered UI has now been visually
+verified** (Playwright/Chromium screenshots, light + dark, `Tarik Skubal`) — see
+below.
 
 ---
 
-## The one real gap
+## Visual verification (2026-08-15) — found and fixed a real bug
 
-**Nobody has looked at the rendered UI**, including the new replay strip. Browser
-screenshot tooling was declined once already this project (see memory) — ask
-before installing/using it again. To check by hand:
+Installed Playwright (already a devDependency with Chromium pre-cached, so no
+new install) and screenshotted the player page in light and dark mode. Found: **Movement,
+Release point, and Velocity-by-inning were all permanently blank** (stuck on
+the loading skeleton) on every player page, while Location profile, the replay
+strip, and the arsenal table worked fine.
 
-```bash
-make dev            # API :8000 + UI :5173
-open http://localhost:5173      # search "Skubal" — good dense arsenal
-```
+**Root cause:** `apps/api/src/bbapi/arrow.py` wrote Arrow IPC batches with
+`compression="zstd"`. The JS `apache-arrow` package (`apps/web`) has no codec
+registered for zstd and throws `Record batch is compressed but codec not
+found` the moment it tries to decode — silently, since React Query has no
+`onError` handler here, so the three charts fed by `/pitches` just sat on
+their skeleton forever with no console error. `/zones`, `/games/*/replay`, and
+`/players/*/arsenal` are JSON, not Arrow, which is why those three kept
+working and masked the bug.
 
-Both servers were left running at pause (`localhost:8000`, `localhost:5173`) —
-may already be up; check before starting new ones.
+**Fix applied:** dropped the `compression="zstd"` option in `arrow_response()`
+(`arrow.py`) — plain uncompressed Arrow IPC decodes fine client-side. Payload
+went from 101KB → 328KB for the same 1,480-row pitch set; still far smaller
+than the JSON alternative. If size becomes a real problem later, the correct
+fix is registering a JS zstd codec via `apache-arrow`'s `compressionRegistry`
+(confirmed it exists in the installed 21.2.0), not reverting this. Verified
+post-fix: all three charts render with real data in both light and dark mode,
+92+14 tests still pass, `tsc --noEmit` clean.
+
+Also removed a stray uncommitted `console.log(points)` debug line in
+`VeloTrend.tsx` found during the same pass (not shipped — it wasn't in the
+last commit, just sitting locally).
+
+**Layout/geometry/dark-mode:** full-page screenshot checked for collisions,
+overflow, and dark-mode contrast — none found. The at-bat replay strip (viz
+#9) is long (one full game, ~87 pitches grouped by at-bat) but reads cleanly;
+no visual issues to report there.
+
+Both dev servers are running (`localhost:8000` API — restarted with `--reload`
+this session so future backend edits hot-reload, `localhost:5173` UI,
+unchanged). `make dev` will also work from a clean start.
 
 ---
 
@@ -137,7 +164,7 @@ don't re-derive it.
 ## Resume paths
 
 **Finish M2 properly:**
-1. Visually verify the replay UI (the gap above).
+1. ~~Visually verify the replay UI~~ — done 2026-08-15, see above.
 2. Run the full backfill, retrain both models (`bb-ml next-pitch`, `bb-ml
    location`), see if the location model's 13.5% top-1 improves with more data.
 3. Consider a location arsenal-style prior (where a pitcher tends to miss) as a
