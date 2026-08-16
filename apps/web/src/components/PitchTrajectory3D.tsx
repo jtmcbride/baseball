@@ -69,7 +69,6 @@ export function PitchTrajectory3D({
   trajectory, width = 480, height = 340,
 }: { trajectory: PitchTrajectory; width?: number; height?: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [replayKey, setReplayKey] = useState(0);
   const [phase, setPhase] = useState<"flight" | "done">("flight");
   const [speed, setSpeed] = useState(DEFAULT_SPEED);
   // A ref, not just the `speed` state, so dragging the slider adjusts the
@@ -78,6 +77,11 @@ export function PitchTrajectory3D({
   // rebuild the whole WebGL scene (and reset the user's camera orbit).
   const speedRef = useRef(DEFAULT_SPEED);
   speedRef.current = speed;
+  // "Replay" resets the ball's flight-time accumulator in place, set up by
+  // the effect below. It deliberately does NOT go through a dependency-array
+  // remount — that would tear down and rebuild the camera/controls too,
+  // snapping the user's orbit/zoom back to the starting framing every time.
+  const replayRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const container = containerRef.current;
@@ -199,6 +203,13 @@ export function PitchTrajectory3D({
     let reachedEnd = false;
     let cancelled = false;
 
+    replayRef.current = () => {
+      tauElapsed = 0;
+      reachedEnd = false;
+      lastFrameTime = null; // otherwise the next frame's dt spans the paused time
+      setPhase("flight");
+    };
+
     // Runs continuously for the life of the component, not just while the
     // ball is in flight — OrbitControls needs a render every frame to feel
     // responsive to drag/zoom/pan, and damping needs `controls.update()`
@@ -241,7 +252,7 @@ export function PitchTrajectory3D({
       });
       container.removeChild(renderer.domElement);
     };
-  }, [trajectory, width, height, replayKey]);
+  }, [trajectory, width, height]);
 
   return (
     <figure style={{ margin: 0 }}>
@@ -259,7 +270,7 @@ export function PitchTrajectory3D({
             {" · drag to orbit, scroll to zoom"}
           </span>
           <button
-            onClick={() => { setPhase("flight"); setReplayKey((k) => k + 1); }}
+            onClick={() => replayRef.current()}
             disabled={phase === "flight"}
             style={{
               background: "none", border: "1px solid var(--gridline)", borderRadius: 4,
