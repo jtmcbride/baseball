@@ -7,10 +7,8 @@ dependencies = [
     "bbcore",
     "bbetl",
     "bbapi",
+    "bbml",
 ]
-
-[project.optional-dependencies]
-ml = ["bbml"]
 
 [dependency-groups]
 dev = [

@@ -177,10 +177,6 @@ dependencies = [
     { name = "bbapi" },
     { name = "bbcore" },
     { name = "bbetl" },
-]
-
-[package.optional-dependencies]
-ml = [
     { name = "bbml" },
 ]
 
@@ -198,9 +194,8 @@ requires-dist = [
     { name = "bbapi", editable = "apps/api" },
     { name = "bbcore", editable = "packages/bbcore" },
     { name = "bbetl", editable = "packages/bbetl" },
-    { name = "bbml", marker = "extra == 'ml'", editable = "packages/bbml" },
+    { name = "bbml", editable = "packages/bbml" },
 ]
-provides-extras = ["ml"]
 
 [package.metadata.requires-dev]
 dev = [
