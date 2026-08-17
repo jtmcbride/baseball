@@ -58,6 +58,12 @@ export function PlayerPage() {
     enabled: !!playerId && role === "batter" && isCatcher,
     retry: false,
   });
+  const framingZone = useQuery({
+    queryKey: ["framing-zone", playerId, season],
+    queryFn: () => api.zones(playerId!, "catcher", "framing", season ?? undefined),
+    enabled: !!playerId && role === "batter" && isCatcher,
+    retry: false,
+  });
 
   const gameForReplay = replayGame ?? games.data?.[0]?.game_pk ?? null;
 
@@ -230,7 +236,7 @@ export function PlayerPage() {
               No graded takes — run <code>bb-ml called-strike</code>.
             </p>
           ) : framingRow ? (
-            <FramingPanel row={framingRow} />
+            <FramingPanel row={framingRow} grid={framingZone.data} />
           ) : (
             <Skeleton h={90} />
           )}

@@ -377,13 +377,23 @@ def build_called_strike_marts(
     season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
 ) -> None:
     """Score every take with the registered model and rebuild the catcher
-    framing and umpire zone marts."""
-    from bbml.marts import build_catcher_framing_mart, build_umpire_zone_mart
+    framing and umpire zone marts, plus their spatial grids (viz #20/#13)."""
+    from bbml.marts import (
+        build_catcher_framing_grid,
+        build_catcher_framing_mart,
+        build_umpire_zone_grid,
+        build_umpire_zone_mart,
+    )
 
     catcher = build_catcher_framing_mart(seasons=list(season) if season else None)
     umpire = build_umpire_zone_mart(seasons=list(season) if season else None)
     console.print(f"[green]mart_catcher_framing: {catcher.height} rows[/green]")
     console.print(f"[green]mart_umpire_zone: {umpire.height} rows[/green]")
+
+    catcher_grid = build_catcher_framing_grid(seasons=list(season) if season else None)
+    umpire_grid = build_umpire_zone_grid(seasons=list(season) if season else None)
+    console.print(f"[green]mart_zone_profile (catcher): {catcher_grid.height} grids[/green]")
+    console.print(f"[green]mart_zone_profile (umpire): {umpire_grid.height} grids[/green]")
 
 
 @app.command("status")

@@ -10,19 +10,27 @@
 
 import { useMemo, useState } from "react";
 import type { ZoneGrid } from "../lib/api";
+import { marchingSquares } from "../lib/contour";
 import { DIVERGING_LEGEND_STOPS, ZONE_METRICS, divergingColor } from "../lib/scales";
 
 interface Props {
   grid: ZoneGrid;
   width?: number;
   height?: number;
+  /**
+   * Trace the surface's crossing of this value as a line, on top of the cell
+   * colors — the umpire zone map (viz #13) uses this at 50% to show the
+   * umpire's actual called-strike boundary against the rulebook rectangle,
+   * a shape that's hard to read off color alone.
+   */
+  contourAt?: number;
 }
 
 // Rulebook zone in the grid's own coordinates: the plate is 17" wide (plus a
 // ball's radius each side), and z is normalized so 0..1 IS the batter's zone.
 const PLATE_HALF_FT = 0.83;
 
-export function StrikeZoneHeatmap({ grid, width = 320, height = 380 }: Props) {
+export function StrikeZoneHeatmap({ grid, width = 320, height = 380, contourAt }: Props) {
   const [hover, setHover] = useState<{ i: number; j: number } | null>(null);
   const metric = ZONE_METRICS[grid.metric] ?? ZONE_METRICS.whiff;
   const { grid_n: n, x_min, x_max, z_min, z_max, min_reliable_n } = grid.extent;
@@ -49,6 +57,14 @@ export function StrikeZoneHeatmap({ grid, width = 320, height = 380 }: Props) {
   }, [grid, n]);
 
   const hovered = hover ? cells[hover.i * n + hover.j] : null;
+
+  // Cell (i, j)'s own vertex already sits at pixel (i*cw, h-j*ch) above — same
+  // linear map, just evaluated at the marching-squares' fractional crossings
+  // instead of integer cell indices.
+  const contour = useMemo(
+    () => (contourAt == null ? [] : marchingSquares(grid.surface, n, contourAt)),
+    [grid, n, contourAt],
+  );
 
   return (
     <figure style={{ margin: 0 }}>
@@ -108,6 +124,17 @@ export function StrikeZoneHeatmap({ grid, width = 320, height = 380 }: Props) {
             </g>
           ))}
 
+          {contour.map(([x1, y1, x2, y2], idx) => (
+            <line
+              key={idx}
+              x1={x1 * cw} y1={h - y1 * ch}
+              x2={x2 * cw} y2={h - y2 * ch}
+              stroke="var(--text-primary)"
+              strokeWidth={2.5}
+              strokeLinecap="round"
+            />
+          ))}
+
           {hovered && (
             <rect
               x={hovered.i * cw} y={h - (hovered.j + 1) * ch}
@@ -127,6 +154,11 @@ export function StrikeZoneHeatmap({ grid, width = 320, height = 380 }: Props) {
 
       <figcaption style={{ fontSize: 12, color: "var(--text-secondary)" }}>
         <ZoneLegend metric={grid.metric} />
+        {contourAt != null && (
+          <div style={{ marginTop: 4, color: "var(--text-muted)" }}>
+            Solid line: the {(contourAt).toFixed(0)}% crossing — this umpire's actual zone boundary.
+          </div>
+        )}
         <div style={{ marginTop: 6, minHeight: 32 }}>
           {hovered && hovered.v != null ? (
             <>
@@ -152,19 +184,16 @@ export function StrikeZoneHeatmap({ grid, width = 320, height = 380 }: Props) {
 
 function ZoneLegend({ metric }: { metric: string }) {
   const def = ZONE_METRICS[metric] ?? ZONE_METRICS.whiff;
+  const [lo, hi] = def.legendLabels ?? (def.higherIsBatterGood ? ["pitcher", "batter"] : ["batter", "pitcher"]);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-      <span style={{ color: "var(--text-muted)" }}>
-        {def.higherIsBatterGood ? "pitcher" : "batter"}
-      </span>
+      <span style={{ color: "var(--text-muted)" }}>{lo}</span>
       <div style={{ display: "flex", flex: 1, height: 8, borderRadius: 4, overflow: "hidden" }}>
         {DIVERGING_LEGEND_STOPS.map((c, i) => (
           <div key={i} style={{ background: c, flex: 1 }} />
         ))}
       </div>
-      <span style={{ color: "var(--text-muted)" }}>
-        {def.higherIsBatterGood ? "batter" : "pitcher"}
-      </span>
+      <span style={{ color: "var(--text-muted)" }}>{hi}</span>
     </div>
   );
 }

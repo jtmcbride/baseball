@@ -3,14 +3,15 @@
 **Paused:** 2026-08-16 · **M1 and M2 complete and visually verified end-to-end.
 Four M3 items pulled forward and finished: the 3D pitch trajectory (viz #6),
 Stuff+ / Location+ / Pitching+ (model #3), the swing-path model (model #4), and
-the called-strike model (model #5) — and models #4/#5 now have a full API +
-UI surface, not just a trained artifact.**
+the called-strike model (model #5) — models #4/#5 have a full API + UI
+surface, and the two dedicated visualizations model #5 unlocked, viz #20
+(catcher framing map) and viz #13 (umpire zone map), are now built too.**
 The full 2015-2026 backfill has landed (9,202,082 pitches, contiguous) and
 every model has been retrained on it — see "Full lake rebuild + retrain" below
 for the numbers, several of which overturned earlier guesses in this file.
 Officials data (umpire per game) is fully ingested (11,154 games) and
-materialized into the lake as `dim_official` — see "Called-strike model" and
-"API + UI for models #4/#5" below.
+materialized into the lake as `dim_official` — see "Called-strike model",
+"API + UI for models #4/#5", and "Viz #20/#13" below.
 
 Read this first in a new session, then `README.md` for how the thing works and
 `~/.claude/plans/i-m-building-an-interactive-zany-ember.md` for the full
@@ -24,23 +25,26 @@ architecture plan and the M3 backlog.
 |---|---|
 | `packages/bbcore` | Config + `Warehouse` adapter (DuckDB). Postgres impl deliberately absent — M3. |
 | `packages/bbetl` | Savant / Stats API / Chadwick clients, transforms, marts, quality suite. **Now includes `transforms/officials.py` (`dim_official`, home-plate umpire per game — see below).** Complete. |
-| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, `RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3), `SwingPathModel` (whiff + contact heads, matched-counterfactual `plane_value`, M3 model #4), `CalledStrikeModel` (binary, `framing_runs` + `umpire_zone_rate`, M3 model #5), `registry.py` (versioned artifacts + optional MLflow), `marts.py` (now also `mart_batter_swing` / `mart_catcher_framing` / `mart_umpire_zone`), `bb-ml` CLI. |
-| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/{id}` + `/stuff` leaderboard, **`/swing/{id}` + `/swing` leaderboard, `/framing/catchers/{id}` + `/framing/catchers` leaderboard, `/framing/umpires` leaderboard** — 5 new routes this session. 24 routes total (`app.openapi()` operation count), JSON + Arrow IPC. |
-| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), 3D pitch trajectory (viz #6), pitch quality panel (model #3), **swing-plane panel for batters (model #4), catcher-framing panel for catchers (model #5)**. Visually verified, light + dark. |
+| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, `RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3), `SwingPathModel` (whiff + contact heads, matched-counterfactual `plane_value`, M3 model #4), `CalledStrikeModel` (binary, `framing_runs` + `umpire_zone_rate`, M3 model #5), `registry.py` (versioned artifacts + optional MLflow), `marts.py` (`mart_batter_swing` / `mart_catcher_framing` / `mart_umpire_zone`, **plus the catcher/umpire spatial grids feeding `mart_zone_profile` — see "Viz #20/#13" below**), `bb-ml` CLI. Now depends on `bbetl` (reuses its zone-smoothing machinery) — added to `pyproject.toml`. |
+| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/{id}` + `/stuff` leaderboard, `/swing/{id}` + `/swing` leaderboard, `/framing/catchers/{id}` + `/framing/catchers` leaderboard, `/framing/umpires` leaderboard, **`/zones/{id}` now also serves `role=catcher`/`role=umpire`** (no new route — the existing generic zone endpoint just grew two more valid roles/metrics). 24 routes total (`app.openapi()` operation count), JSON + Arrow IPC. |
+| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), 3D pitch trajectory (viz #6), pitch quality panel (model #3), swing-plane panel for batters (model #4), catcher-framing panel for catchers (model #5) **with an embedded zone map (viz #20)**, **a new standalone Umpires tab (viz #13) — umpire leaderboard + zone map with a marching-squares 50% contour overlay**. Visually verified, light + dark. |
 
-**Verification status:** 203 backend Python tests (bbcore/bbetl/bbml/api,
-including 25 called-strike tests — 23 plus 2 added this round for the
-null-group-column bug below — 3 `dim_official` transform tests, and 10 new
-swing/framing API contract tests) + 18 frontend tests, `tsc --noEmit`,
-`oxlint`, `ruff check`, `bb check` (data quality — all error-level checks
-pass), `bb-ml status` all pass/registered. All eight models trained on the
-full 9,202,082-pitch 2015-2026 lake and saved to
+**Verification status:** 206 backend Python tests (bbcore/bbetl/bbml/api,
+including 25 called-strike tests, 3 `dim_official` transform tests, 10
+swing/framing API contract tests, and **3 new `test_marts.py` tests for the
+viz #20/#13 grid-building helper's null-id-column filter**) + 23 frontend
+tests (**5 new for the marching-squares contour tracer**), `tsc --noEmit`,
+`oxlint`, `ruff check`, `bb check` (data quality — all
+error-level checks pass), `bb-ml status` all pass/registered. All eight
+models trained on the full 9,202,082-pitch 2015-2026 lake and saved to
 `data/models/{next_pitch,location,stuff_plus,location_plus,pitching_plus,swing_whiff,swing_contact,called_strike}/`.
 **The rendered UI has been visually verified** (Playwright/Chromium
 screenshots, light + dark) for the player page including the two new
 model #4/#5 panels — `Luis Arraez` (batter, swing plane) and `Jose Trevino`
 (catcher, swing plane + framing runs). Numbers on screen were cross-checked
-against the training-run leaderboard and matched exactly.
+against the training-run leaderboard and matched exactly. **Viz #20/#13 got
+the same treatment** — Trevino's embedded framing map and the new Umpires
+tab's zone map + contour, light and dark — see "Viz #20/#13" below.
 
 ---
 
@@ -484,10 +488,83 @@ default to 500 to match `MIN_UMPIRE_PITCHES`, the mart's own build floor —
 anything stricter than the floor the mart itself used returns nothing, for
 every umpire, every season.
 
-Not yet done: viz #20 (catcher framing map, `StrikeZoneHeatmap` +
-`mart_zone_profile` with `role="catcher"`) and viz #13 (umpire zone map,
-50%-contour per umpire) are dedicated visualizations, not the same thing as
-the per-player numbers this section adds — still not built.
+Not yet done at the time this section was written: viz #20/#13 — see below,
+now built.
+
+---
+
+## Viz #20/#13 (2026-08-16) — the two visualizations model #5 unlocked
+
+Both reuse `StrikeZoneHeatmap` and `mart_zone_profile` exactly as the model #5
+plan called for — no new chart component, no new API route. `/zones/{id}`
+already took any `role`/`metric` pair; it just grew two more (`role=catcher`
++ `metric=framing`, `role=umpire` + `metric=strike_rate`), and
+`mart_zone_profile` grew two more per-role Parquet files
+(`catcher.parquet`, `umpire.parquet`) alongside the existing `batter.parquet`
+/ `pitcher.parquet` — same directory, same glob, so the warehouse view picks
+them up with no re-registration needed.
+
+**The grid-building logic lives in `bbml.marts` now, not `bbetl.transforms.zones`**,
+because it's the first zone grid that needs a model score rather than a raw
+lake column. `_build_entity_grids` is the shared helper (id column, role,
+`MetricSpec`, per-season pitch qualifier in, one grid row per qualifying
+entity-season out) — it calls the *same* `build_grid`/`GRID_N` machinery
+`bbetl.transforms.zones.build_zone_profiles` already uses for batter/pitcher
+grids, imported across the package boundary (`bbml` now depends on `bbetl` in
+`pyproject.toml` — it didn't need to before this). Built the null-id-column
+filter in from the start rather than discovering it the way
+`framing_runs`/`umpire_zone_rate` did (see "API + UI for models #4/#5" above)
+— `UMPIRE_COLUMN` is structurally null pre-2023, and grouping by it unfiltered
+would produce the same phantom-row bug in a grid instead of a scalar. Pinned
+with `test_marts.py::TestBuildEntityGrids::test_a_null_id_column_is_dropped_not_grouped`.
+
+- **`build_catcher_framing_grid`** (viz #20): weight per pitch is
+  `actual_strike - P(strike)`, the same residual `framing_runs` sums, left
+  un-aggregated by count so the surface reads as "where does this catcher's
+  receiving gain or cost strikes" rather than a run total. **1,048 catcher-season
+  grids** — same count as `mart_catcher_framing`, same 500-pitch qualifier.
+  Rendered as a second card inside the existing `FramingPanel` (now takes an
+  optional `grid` prop) rather than a new section — the scalar number and the
+  map are the same fact at two resolutions, so they sit side by side. Verified
+  on Jose Trevino: a strong "steals strikes low, especially low-and-away"
+  signature (dark red band just below and outside the rulebook zone, blue
+  above) — matches his public reputation as a low-ball framer, not tuned to
+  produce this.
+- **`build_umpire_zone_grid`** (viz #13): weight is the umpire's own raw
+  `is_called_strike` (×100), no model score needed — unlike the catcher grid
+  this metric doesn't need a residual, the actual call rate by location IS
+  the thing being mapped. **362 umpire-season grids** (more than
+  `mart_umpire_zone`'s 230 — that mart restricts to *borderline* takes only
+  for its scalar edge calculation; the grid's own 500-total-pitch qualifier
+  is looser). Umpires have no player page (no `dim_player` row), so this
+  needed a new standalone view: a top-level "Players / Umpires" tab in
+  `App.tsx` (plain `useState`, no router — the app never had one and still
+  doesn't need one for two views) rendering a new `UmpiresPage.tsx` — a
+  `/framing/umpires` leaderboard table on the left, the selected umpire's
+  zone map on the right.
+- **New: `lib/contour.ts`, a small marching-squares tracer**, `StrikeZoneHeatmap`'s
+  new optional `contourAt` prop. The umpire zone map is unreadable as color
+  alone near 50% (a smooth gradient through the diverging ramp's neutral
+  band), so the client traces the surface's own 50% crossing as a line on top
+  — visually distinct from the thin rulebook-zone rectangle the chart already
+  draws, so both are readable at once. Segments are returned unstitched (a
+  flat list of line pieces, not closed polygons) since a bare contour line
+  renders identically either way and stitching would be real complexity for
+  no visual gain. `StrikeZoneHeatmap`'s legend also generalized: `MetricDef`
+  gained an optional `legendLabels` override (`"ball"`/`"strike"` for the
+  umpire map, `"fewer strikes called"`/`"more strikes called"` for the
+  catcher map) since the existing pitcher/batter-derived labels don't apply
+  to either.
+
+**Real numbers, not hypothetical.** Willie Traynor (2026, 554 borderline
+takes) has the widest edge in the league at -14.6pp / -13.0 framing runs, and
+his zone map shows why: a visibly tight, almost perfectly rectangular 50%
+contour that undershoots the rulebook zone on the sides — a hitter's-count
+umpire on borderline pitches, not noise. Verified in the browser, light and
+dark, for both the Trevino framing map and the Traynor zone map; no console
+errors beyond the pre-existing FA/EP/KN duplicate-React-key warning noted in
+the previous section (still out of scope — not touched by any file this
+session either).
 
 ---
 
@@ -500,9 +577,11 @@ the per-player numbers this section adds — still not built.
   `mart_catcher_framing` 1,048 rows (catcher x season); `mart_umpire_zone` 230
   rows (umpire x season — 238 minus 8 phantom null-umpire rows, one per
   season 2015-2022, dropped by the bug fix in "API + UI for models #4/#5"
-  above). `mart_pitcher_arsenal` / `mart_zone_profile` not re-counted this
-  session — re-run `bb check --coverage` before trusting the old figures
-  below.
+  above). `mart_zone_profile` now also holds **1,048 catcher-season grids and
+  362 umpire-season grids** (viz #20/#13, see above) alongside its existing
+  batter/pitcher grids. `mart_pitcher_arsenal` / the batter/pitcher share of
+  `mart_zone_profile` not re-counted this session — re-run `bb check
+  --coverage` before trusting the old figures below.
 - Officials: **11,154 games** with a home-plate umpire, now materialized as
   `dim_official` in the lake (`bb ingest officials` then `bb build
   officials`), full coverage.
@@ -528,17 +607,19 @@ needed, but there is no gap left to fill right now.
 
 ## Committed
 
-`git log` (newest first): the called-strike model + `dim_official` (`6fc00fe`),
-the swing-path model + `vaa_deg`/`haa_deg` (`a6a987e`), M3 model #3 (`f979595`),
+`git log` (newest first): the API routes + player-page panels for models
+#4/#5, `mart_batter_swing`, the `dim_official` warehouse-registration fix,
+and the null-group-column fix in `framing_runs`/`umpire_zone_rate`
+(`6ff1462`), the called-strike model + `dim_official` (`6fc00fe`), the
+swing-path model + `vaa_deg`/`haa_deg` (`a6a987e`), M3 model #3 (`f979595`),
 3D pitch trajectory work (`4b77e20`/`d3d9c2f`/`782a5b5`), the zstd Arrow fix
 (`cbf07a8`), an earlier STATUS.md update (`4694c91`), the schema-overrides fix
 (`20d776b`), `make train` (`3455af5`), M2 (`00d8ad9`), the first bbml package
-(`67e2e16`), and M1 (`6e0d555`). This session's work — the API routes and
-player-page panels for models #4/#5, `mart_batter_swing`, the `dim_official`
-warehouse-registration fix, the null-group-column fix in
-`framing_runs`/`umpire_zone_rate`, and this STATUS.md update — lands in the
-commit right after this one; check `git log` rather than trusting this list
-to stay current.
+(`67e2e16`), and M1 (`6e0d555`). This session's work — viz #20/#13
+(`bbml.marts`'s new grid builders, the two `/zones` role/metric additions,
+`lib/contour.ts`, the `UmpiresPage` tab, the `FramingPanel` map, and this
+STATUS.md update) — lands in the commit right after this one; check
+`git log` rather than trusting this list to stay current.
 
 ---
 
@@ -612,23 +693,21 @@ Still open from that list:
   question on a proper contiguous split.
 
 **M3, in progress:** models #3 (Stuff+/Location+/Pitching+), #4 (swing-path),
-and #5 (called-strike / framing) are all done, and #4/#5 now have a full API
-+ UI surface too — see "API + UI for models #4/#5" above. What's left there
-is specifically the two dedicated visualizations, not per-player numbers:
-viz #20 (catcher framing map) and viz #13 (umpire zone map) — both marts
-(`mart_catcher_framing`, `mart_umpire_zone`) are already built and API-served,
-so this is a viz-only task now, no model or backend work. The
-previously-queued zone-expansion umpire rerun is superseded: `dim_official`
-now exists and the called-strike model's own validation (YoY stability,
-named-catcher check) is the more rigorous version of that question — no need
-to separately rerun the old artifact's analysis. Model #5's plan is still in
-the assistant's project memory (`baseball-model5-called-strike-plan`) if the
-detail behind a design choice is needed; the plan itself is now executed, not
-just scoped. Still not started: live game-feed mode, `PostgresWarehouse`,
-model #2 (arsenal re-classification), model #6 (swing decision, needs #5's
-P(strike) as RV(take) — now unblocked) and model #15 (ABS counterfactual,
-also now unblocked), viz 7-8, 10-12, 14-20 minus #13/#20's marts, Retrosheet
-backfill.
+and #5 (called-strike / framing) are all done, #4/#5 have a full API + UI
+surface (see "API + UI for models #4/#5" above), and the two dedicated
+visualizations model #5 unlocked — viz #20 (catcher framing map) and viz #13
+(umpire zone map) — are now built too (see "Viz #20/#13" above). That closes
+out everything model #5's plan called for. The previously-queued
+zone-expansion umpire rerun is superseded: `dim_official` now exists and the
+called-strike model's own validation (YoY stability, named-catcher check) is
+the more rigorous version of that question — no need to separately rerun the
+old artifact's analysis. Model #5's plan is still in the assistant's project
+memory (`baseball-model5-called-strike-plan`) if the detail behind a design
+choice is needed; the plan itself is now fully executed, not just scoped.
+Still not started: live game-feed mode, `PostgresWarehouse`, model #2
+(arsenal re-classification), model #6 (swing decision, needs #5's P(strike)
+as RV(take) — now unblocked) and model #15 (ABS counterfactual, also now
+unblocked), viz 7-8, 10-12, 14, 15-19, Retrosheet backfill.
 
 ---
 
@@ -695,6 +774,13 @@ backfill.
   season into one fake "umpire". `framing_runs`/`umpire_zone_rate`
   (`models/called_strike.py`) do this now; it is not automatic anywhere else
   a null-capable column gets grouped.
+- **`bbml` now depends on `bbetl`** (`pyproject.toml`), added when viz #20/#13's
+  grid builders needed `bbetl.transforms.zones`'s smoothing machinery
+  (`build_grid`, `GRID_N`, `MetricSpec`). It worked without the declared
+  dependency before this because the workspace root installs every package
+  into one shared venv regardless — don't rely on that again; declare the
+  dependency explicitly if a package's code actually imports across the
+  boundary, the way `bbapi` already declares `bbml`.
 - **DuckDB persists a view's resolved schema.** Rebuilding the lake with a changed
   column set leaves stale views that fail confusingly. `build pitches` now
   re-registers automatically; keep it that way.

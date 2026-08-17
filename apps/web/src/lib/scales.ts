@@ -133,6 +133,14 @@ export interface MetricDef {
   format: (v: number) => string;
   /** True when a HIGHER value favours the batter. */
   higherIsBatterGood: boolean;
+  /**
+   * Legend endpoint labels, low then high. Most metrics are a batter-vs-pitcher
+   * tug of war, so `higherIsBatterGood` alone is enough to derive them — this
+   * override exists for metrics where neither end of the ramp is "the batter":
+   * a catcher framing edge runs batter-favored to catcher-favored, and a raw
+   * strike rate just runs ball to strike.
+   */
+  legendLabels?: [string, string];
 }
 
 export const ZONE_METRICS: Record<string, MetricDef> = {
@@ -155,6 +163,24 @@ export const ZONE_METRICS: Record<string, MetricDef> = {
   run_value: {
     key: "run_value", label: "Run value", mid: 0, halfRange: 0.09,
     format: (v) => v.toFixed(3), higherIsBatterGood: true,
+  },
+  // Catcher framing edge (viz #20): actual_strike - P(strike) at that spot,
+  // the same residual `framing_runs` sums, left un-aggregated. mid/halfRange
+  // set from the real grid data (p1/p99 on reliable cells: -0.13 / +0.11).
+  framing: {
+    key: "framing", label: "Framing edge", mid: 0, halfRange: 0.10,
+    format: (v) => (v >= 0 ? "+" : "") + v.toFixed(2),
+    higherIsBatterGood: false,
+    legendLabels: ["fewer strikes called", "more strikes called"],
+  },
+  // Umpire zone map (viz #13): the umpire's own actual called-strike rate by
+  // location — no model score involved. The client draws its 50% contour as
+  // the umpire's effective zone boundary against the rulebook rectangle.
+  strike_rate: {
+    key: "strike_rate", label: "Called-strike rate", mid: 50, halfRange: 50,
+    format: (v) => `${v.toFixed(0)}%`,
+    higherIsBatterGood: false,
+    legendLabels: ["ball", "strike"],
   },
 };
 

@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import { FilterBar } from "./components/FilterBar";
 import { PlayerSearch } from "./components/PlayerSearch";
 import { PlayerPage } from "./pages/PlayerPage";
+import { UmpiresPage } from "./pages/UmpiresPage";
 import "./lib/theme.css";
 
 const queryClient = new QueryClient({
@@ -15,7 +17,11 @@ const queryClient = new QueryClient({
   },
 });
 
+type View = "players" | "umpires";
+
 export default function App() {
+  const [view, setView] = useState<View>("players");
+
   return (
     <QueryClientProvider client={queryClient}>
       <div style={{ maxWidth: 1280, margin: "0 auto", padding: 20 }}>
@@ -28,15 +34,45 @@ export default function App() {
           <h1 style={{ margin: 0, fontSize: 18, letterSpacing: "-0.01em" }}>
             Baseball<span style={{ color: "var(--text-muted)" }}>/analytics</span>
           </h1>
-          <PlayerSearch />
+          <nav style={{ display: "flex", gap: 4 }}>
+            <ViewTab active={view === "players"} onClick={() => setView("players")}>
+              Players
+            </ViewTab>
+            <ViewTab active={view === "umpires"} onClick={() => setView("umpires")}>
+              Umpires
+            </ViewTab>
+          </nav>
+          {view === "players" && <PlayerSearch />}
         </header>
 
         <div style={{ marginBottom: 16 }}>
           <FilterBar />
         </div>
 
-        <PlayerPage />
+        {view === "players" ? <PlayerPage /> : <UmpiresPage />}
       </div>
     </QueryClientProvider>
+  );
+}
+
+function ViewTab({
+  active, onClick, children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "6px 12px", fontSize: 13, borderRadius: "var(--radius)",
+        border: "1px solid var(--border)", cursor: "pointer",
+        background: active ? "var(--gridline)" : "var(--surface-1)",
+        color: active ? "var(--text-primary)" : "var(--text-secondary)",
+      }}
+    >
+      {children}
+    </button>
   );
 }

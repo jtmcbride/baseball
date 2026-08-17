@@ -13,11 +13,18 @@ against his fastball as an equal.
 
 from __future__ import annotations
 
+import numpy as np
 import polars as pl
 
 from bbcore.config import Settings, get_settings
 from bbcore.logging import get_logger
-from bbml.features.called_strike import CATCHER_COLUMN, UMPIRE_COLUMN, build_called_strike_frame
+from bbetl.transforms.zones import GRID_N, MetricSpec, build_grid
+from bbml.features.called_strike import (
+    CATCHER_COLUMN,
+    TARGET_CALLED_STRIKE,
+    UMPIRE_COLUMN,
+    build_called_strike_frame,
+)
 from bbml.features.run_value import RunValue
 from bbml.features.stuff import ROLES, TARGET_RUN_VALUE, build_pitch_quality_frame
 from bbml.features.swing import build_swing_frame
@@ -255,6 +262,134 @@ def build_umpire_zone_mart(
     )
     _write(out, MART_UMPIRE_ZONE, s)
     return out
+
+
+MART_ZONE_PROFILE = "mart_zone_profile"
+
+# Same qualifier as the scalar marts above -- a grid needs the same amount of
+# data to be worth drawing as a season total needs to be worth publishing.
+MIN_GRID_PITCHES = MIN_CATCHER_PITCHES
+
+
+def _build_entity_grids(
+    frame: pl.DataFrame, *, id_col: str, role: str, spec: MetricSpec, min_pitches: int
+) -> pl.DataFrame:
+    """One smoothed grid per (entity, season), same row shape as
+    `mart_zone_profile` (`bbetl.transforms.zones.build_zone_profiles`) so
+    `StrikeZoneHeatmap` and `/zones/{id}` need no special-casing for
+    role="catcher"/"umpire" -- they already take any role/metric pair.
+
+    `id_col` can be structurally null (`UMPIRE_COLUMN` only covers 2023+, see
+    `dim_official`) -- filtered before grouping. This is the exact null-group
+    bug `framing_runs`/`umpire_zone_rate` had (see `models/called_strike.py`);
+    fixed here from the start rather than caught after the fact.
+    """
+    frame = frame.filter(pl.col(id_col).is_not_null())
+    counts = frame.group_by([id_col, "season"]).len().filter(pl.col("len") >= min_pitches)
+    qualified = set(zip(counts[id_col].to_list(), counts["season"].to_list(), strict=True))
+
+    rows: list[dict] = []
+    for (pid, season), group in frame.group_by([id_col, "season"], maintain_order=True):
+        if (pid, season) not in qualified:
+            continue
+        built = build_grid(group, spec)
+        if built is None:
+            continue
+        surface, eff_n, n = built
+        rows.append(
+            {
+                "mlbam_id": int(pid),
+                "season": int(season),
+                "role": role,
+                "metric": spec.name,
+                "n_pitches": n,
+                "grid_n": GRID_N,
+                "surface": np.nan_to_num(surface, nan=np.nan).ravel().tolist(),
+                "reliability": eff_n.ravel().tolist(),
+            }
+        )
+    return pl.DataFrame(rows)
+
+
+def build_catcher_framing_grid(
+    *,
+    seasons: list[int] | None = None,
+    min_pitches: int = MIN_GRID_PITCHES,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """`mart_zone_profile` role="catcher": where a catcher's framing edge runs
+    positive/negative across the zone (viz #20) -- not just the season total
+    `mart_catcher_framing` already has. Weight per pitch is the same residual
+    `framing_runs` sums, `actual_strike - P(strike)`, left as strikes rather
+    than run-scaled so the surface reads as "does he steal/lose calls here",
+    independent of which counts those calls happened to come in.
+    """
+    s = settings or get_settings()
+    model, _rv = load_called_strike_model()
+    frame = build_called_strike_frame(seasons=seasons, settings=s)
+    if frame.height == 0:
+        log.warning("no taken pitches to score")
+        return pl.DataFrame()
+
+    p = model.predict_proba(frame)
+    actual = frame[TARGET_CALLED_STRIKE].cast(pl.Float64).to_numpy()
+    frame = frame.with_columns(pl.Series("_edge", actual - p))
+
+    out = _build_entity_grids(
+        frame,
+        id_col=CATCHER_COLUMN,
+        role="catcher",
+        spec=MetricSpec("framing", "_edge"),
+        min_pitches=min_pitches,
+    )
+    if out.height == 0:
+        return out
+    _write_zone_grid(out, "catcher", s)
+    return out
+
+
+def build_umpire_zone_grid(
+    *,
+    seasons: list[int] | None = None,
+    min_pitches: int = MIN_GRID_PITCHES,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """`mart_zone_profile` role="umpire": actual called-strike rate by
+    location (viz #13) -- the client draws its 50% contour against the
+    rulebook rectangle the chart already has, to show the umpire's effective
+    zone shape rather than its color alone. No model score needed here, only
+    the umpire's own ball/strike calls -- `is_called_strike` IS the rate being
+    mapped, unlike the catcher grid which needs the residual against a
+    prediction.
+    """
+    s = settings or get_settings()
+    frame = build_called_strike_frame(seasons=seasons, settings=s)
+    if frame.height == 0:
+        log.warning("no taken pitches to score")
+        return pl.DataFrame()
+
+    frame = frame.with_columns(
+        (pl.col(TARGET_CALLED_STRIKE).cast(pl.Float64) * 100.0).alias("_strike_pct")
+    )
+    out = _build_entity_grids(
+        frame,
+        id_col=UMPIRE_COLUMN,
+        role="umpire",
+        spec=MetricSpec("strike_rate", "_strike_pct"),
+        min_pitches=min_pitches,
+    )
+    if out.height == 0:
+        return out
+    _write_zone_grid(out, "umpire", s)
+    return out
+
+
+def _write_zone_grid(df: pl.DataFrame, filename: str, settings: Settings) -> None:
+    out_dir = settings.lake_dir / MART_ZONE_PROFILE
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(out_dir / f"{filename}.parquet", compression="zstd", statistics=True)
+    log.info("wrote %d %s zone grids -> %s", df.height, filename, out_dir)
+    _register_table(MART_ZONE_PROFILE, settings)
 
 
 def _write(df: pl.DataFrame, name: str, settings: Settings) -> None:

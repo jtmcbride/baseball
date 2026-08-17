@@ -231,7 +231,7 @@ class TestZones:
 
     def test_rejects_unknown_role(self, client, health):
         _needs(health, "mart_zone_profile")
-        r = client.get("/zones/1", params={"role": "umpire"})
+        r = client.get("/zones/1", params={"role": "bogus"})
         assert r.status_code == 400
 
     def test_grid_ships_surface_and_reliability_together(self, client, health):

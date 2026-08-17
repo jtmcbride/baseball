@@ -17,8 +17,8 @@ from bbetl.transforms.zones import grid_extent
 
 router = APIRouter(prefix="/zones", tags=["zones"])
 
-VALID_METRICS = {"xwoba", "whiff", "swing", "exit_velo", "run_value"}
-VALID_ROLES = {"batter", "pitcher"}
+VALID_METRICS = {"xwoba", "whiff", "swing", "exit_velo", "run_value", "framing", "strike_rate"}
+VALID_ROLES = {"batter", "pitcher", "catcher", "umpire"}
 
 
 @router.get("/extent")
