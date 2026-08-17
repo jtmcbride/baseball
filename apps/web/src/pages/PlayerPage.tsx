@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { ArsenalTable } from "../components/ArsenalTable";
+import { FramingPanel } from "../components/FramingPanel";
 import { MovementPlot, type MovementPoint } from "../components/MovementPlot";
 import { ReleasePlot, type ReleasePoint } from "../components/ReleasePlot";
 import { ReplayStrip } from "../components/ReplayStrip";
 import { StrikeZoneHeatmap } from "../components/StrikeZoneHeatmap";
 import { StuffPanel } from "../components/StuffPanel";
+import { SwingPanel } from "../components/SwingPanel";
 import { VeloTrend, type VeloPoint } from "../components/VeloTrend";
 import { api, columns } from "../lib/api";
 import { useFilters } from "../store/filters";
@@ -40,6 +42,21 @@ export function PlayerPage() {
     queryKey: ["games", playerId, season],
     queryFn: () => api.games(playerId!, season ?? undefined),
     enabled: !!playerId && role === "pitcher",
+  });
+
+  const swing = useQuery({
+    queryKey: ["swing", playerId, season],
+    queryFn: () => api.swing(playerId!, season ?? undefined),
+    enabled: !!playerId && role === "batter",
+    retry: false,
+  });
+
+  const isCatcher = profile.data?.player?.primary_position === "C";
+  const framing = useQuery({
+    queryKey: ["framing", playerId, season],
+    queryFn: () => api.catcherFraming(playerId!, season ?? undefined),
+    enabled: !!playerId && role === "batter" && isCatcher,
+    retry: false,
   });
 
   const gameForReplay = replayGame ?? games.data?.[0]?.game_pk ?? null;
@@ -91,6 +108,11 @@ export function PlayerPage() {
     () => (stuff.data ?? []).filter((r) => r.season === stuffSeason),
     [stuff.data, stuffSeason],
   );
+
+  // Same reasoning as stuffRows: swing plane and framing runs don't pool
+  // across seasons either, so show the most recent one on hand.
+  const swingRow = swing.data?.[0];
+  const framingRow = framing.data?.[0];
 
   if (!playerId) {
     return (
@@ -177,6 +199,40 @@ export function PlayerPage() {
             <StuffPanel rows={stuffRows} onSelect={setPitchType} selected={pitchType} />
           ) : (
             <Skeleton h={220} />
+          )}
+        </section>
+      )}
+
+      {role === "batter" && (
+        <section className="card">
+          <h3>Swing plane{swingRow ? ` · ${swingRow.season}` : ""}</h3>
+          <p className="subtitle">
+            Is this batter's swing plane good against the pitches he actually sees?
+          </p>
+          {swing.isError ? (
+            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              No graded swings — run <code>bb-ml swing</code>.
+            </p>
+          ) : swingRow ? (
+            <SwingPanel row={swingRow} />
+          ) : (
+            <Skeleton h={110} />
+          )}
+        </section>
+      )}
+
+      {role === "batter" && isCatcher && (
+        <section className="card">
+          <h3>Catcher framing{framingRow ? ` · ${framingRow.season}` : ""}</h3>
+          <p className="subtitle">How many strikes this catcher's receiving is worth.</p>
+          {framing.isError ? (
+            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              No graded takes — run <code>bb-ml called-strike</code>.
+            </p>
+          ) : framingRow ? (
+            <FramingPanel row={framingRow} />
+          ) : (
+            <Skeleton h={90} />
           )}
         </section>
       )}

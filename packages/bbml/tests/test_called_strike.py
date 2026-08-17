@@ -256,6 +256,23 @@ class TestFramingRuns:
         out = framing_runs(df, model, synthetic_rv, min_pitches=500)
         assert out.height == 0
 
+    def test_a_null_group_column_is_dropped_not_grouped(self, synthetic_rv):
+        """`UMPIRE_COLUMN` is null whenever `dim_official` doesn't cover a game
+        (everything pre-2023) — a null group must not become its own giant
+        leaderboard row that swamps every real umpire by sample size."""
+        df = pl.DataFrame(
+            {
+                UMPIRE_COLUMN: [None] * 600 + [1] * 600,
+                "balls": [0] * 1200,
+                "strikes": [0] * 1200,
+                TARGET_CALLED_STRIKE: [1] * 1200,
+            }
+        )
+        model = _FixedProbaModel(np.full(1200, 0.5))
+        out = framing_runs(df, model, synthetic_rv, group_col=UMPIRE_COLUMN, min_pitches=500)
+        assert out.height == 1
+        assert out[UMPIRE_COLUMN][0] == 1
+
 
 class TestUmpireZoneRate:
     def test_borderline_only_umpire_who_calls_more_strikes_shows_positive_edge(self):
@@ -282,6 +299,19 @@ class TestUmpireZoneRate:
         model = _FixedProbaModel(np.full(n, 0.99))  # nowhere near borderline
         out = umpire_zone_rate(df, model, min_pitches=500)
         assert out.height == 0
+
+    def test_a_null_umpire_is_dropped_not_grouped(self):
+        n = 600
+        df = pl.DataFrame(
+            {
+                UMPIRE_COLUMN: [None] * n + [1] * n,
+                TARGET_CALLED_STRIKE: [1] * (2 * n),
+            }
+        )
+        model = _FixedProbaModel(np.full(2 * n, 0.5))
+        out = umpire_zone_rate(df, model, min_pitches=500)
+        assert out.height == 1
+        assert out[UMPIRE_COLUMN][0] == 1
 
 
 # --- model against real data ---------------------------------------------------

@@ -263,6 +263,11 @@ def framing_runs(
     pitcher combination would produce at that location and count, weighted by
     how much a strike was worth there — the standard framing-runs
     construction, credited to whichever column is grouped on.
+
+    Rows with a null `group_col` are dropped rather than grouped: `dim_official`
+    only covers 2023+ (see STATUS.md), so grouping by `UMPIRE_COLUMN` over an
+    older frame would otherwise put every pre-2023 take into one giant
+    "unknown umpire" row that swamps every real one by sample size alone.
     """
     p = model.predict_proba(df)
     sv = run_value.marginal_strike_value(df["balls"], df["strikes"])
@@ -270,7 +275,7 @@ def framing_runs(
     credit = (actual - p) * sv
     return (
         df.with_columns(pl.Series("_credit", credit))
-        .filter(pl.col("_credit").is_not_null())
+        .filter(pl.col("_credit").is_not_null() & pl.col(group_col).is_not_null())
         .group_by(group_col)
         .agg(pl.col("_credit").sum().alias("framing_runs"), pl.len().alias("n"))
         .filter(pl.col("n") >= min_pitches)
@@ -285,11 +290,12 @@ def umpire_zone_rate(df: pl.DataFrame, model: CalledStrikeModel, *, min_pitches:
     `framing_runs` grouped by `UMPIRE_COLUMN`. Restricted to
     `0.2 <= P(strike) <= 0.8` — pitches nowhere near the edge of the zone are
     called correctly by every umpire and would just dilute the signal with a
-    huge n of uninformative agreement.
+    huge n of uninformative agreement. Null-umpire rows are dropped for the
+    same reason `framing_runs` drops them — see its docstring.
     """
     p = model.predict_proba(df)
     borderline = df.with_columns(pl.Series("_p", p)).filter(
-        (pl.col("_p") >= 0.2) & (pl.col("_p") <= 0.8)
+        (pl.col("_p") >= 0.2) & (pl.col("_p") <= 0.8) & pl.col(UMPIRE_COLUMN).is_not_null()
     )
     return (
         borderline.group_by(UMPIRE_COLUMN)

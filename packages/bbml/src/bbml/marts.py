@@ -20,8 +20,10 @@ from bbcore.logging import get_logger
 from bbml.features.called_strike import CATCHER_COLUMN, UMPIRE_COLUMN, build_called_strike_frame
 from bbml.features.run_value import RunValue
 from bbml.features.stuff import ROLES, TARGET_RUN_VALUE, build_pitch_quality_frame
+from bbml.features.swing import build_swing_frame
 from bbml.models.called_strike import CalledStrikeModel, framing_runs, umpire_zone_rate
 from bbml.models.pitch_quality import PitchQualityModel
+from bbml.models.swing_path import SwingPathModel, plane_value_by_batter
 from bbml.registry import latest_dir
 
 log = get_logger(__name__)
@@ -162,6 +164,59 @@ def build_catcher_framing_mart(
         .sort(["season", "framing_runs"], descending=[False, True])
     )
     _write(out, MART_CATCHER_FRAMING, s)
+    return out
+
+
+MART_BATTER_SWING = "mart_batter_swing"
+
+# Matches `bb-ml swing`'s own default qualifier — a mart built with a looser
+# threshold than the CLI leaderboard it's meant to agree with would be a
+# second, silently different definition of "enough swings".
+MIN_BATTER_SWINGS = 200
+
+
+def build_batter_swing_mart(
+    *,
+    seasons: list[int] | None = None,
+    min_swings: int = MIN_BATTER_SWINGS,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """`mart_batter_swing`: both `plane_value` heads per batter x season.
+
+    `plane_value_by_batter` already does the aggregation (features/swing.py's
+    counterfactual, per head); this just runs it for both heads and joins
+    them into one row per batter-season so the UI doesn't need two round trips
+    for two numbers about the same swing.
+    """
+    s = settings or get_settings()
+    whiff_dir, contact_dir = latest_dir("swing_whiff"), latest_dir("swing_contact")
+    if whiff_dir is None or contact_dir is None:
+        raise FileNotFoundError(
+            "No registered swing_whiff/swing_contact model. Run `bb-ml swing` first."
+        )
+    whiff_model = SwingPathModel.load(whiff_dir)
+    contact_model = SwingPathModel.load(contact_dir)
+
+    frame = build_swing_frame(seasons=seasons, settings=s)
+    if frame.height == 0:
+        log.warning("no swings to score")
+        return pl.DataFrame()
+
+    whiff_board = plane_value_by_batter(whiff_model, frame, min_swings=min_swings).rename(
+        {"plane_value_per_100": "whiff_plane_value_per_100", "swings": "whiff_swings"}
+    )
+    contact_board = plane_value_by_batter(contact_model, frame, min_swings=min_swings).select(
+        "batter",
+        "season",
+        pl.col("plane_value_per_100").alias("contact_plane_value_per_100"),
+        pl.col("swings").alias("contact_swings"),
+    )
+    out = (
+        whiff_board.join(contact_board, on=["batter", "season"], how="left")
+        .rename({"batter": "mlbam_id"})
+        .sort(["season", "whiff_plane_value_per_100"], descending=[False, True])
+    )
+    _write(out, MART_BATTER_SWING, s)
     return out
 
 

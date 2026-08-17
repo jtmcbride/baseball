@@ -291,6 +291,19 @@ def train_swing_path(
             console.print(best)
 
     console.print(table)
+    build_swing_mart(season=list(season) if season else None, min_swings=min_swings)
+
+
+@app.command("swing-mart")
+def build_swing_mart(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+    min_swings: Annotated[int, typer.Option(help="Batter-season qualifier.")] = 200,
+) -> None:
+    """Score every swing with the registered heads and rebuild `mart_batter_swing`."""
+    from bbml.marts import build_batter_swing_mart
+
+    mart = build_batter_swing_mart(seasons=list(season) if season else None, min_swings=min_swings)
+    console.print(f"[green]mart_batter_swing: {mart.height} rows[/green]")
 
 
 @app.command("called-strike")

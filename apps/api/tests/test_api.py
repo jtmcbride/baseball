@@ -362,3 +362,93 @@ class TestStuff:
         _needs(health, "mart_pitcher_stuff")
         r = client.get("/stuff", params={"metric": "pitches; DROP TABLE dim_player"})
         assert r.status_code == 400
+
+
+@pytest.fixture(scope="module")
+def graded_batter(client: TestClient, health: dict) -> int:
+    _needs(health, "mart_batter_swing")
+    rows = client.get("/swing", params={"limit": 1, "min_swings": 200}).json()
+    if not rows:
+        pytest.skip("no graded batter-seasons above the leaderboard threshold")
+    return rows[0]["mlbam_id"]
+
+
+class TestSwing:
+    """Swing-path plane-value routes, backed by mart_batter_swing."""
+
+    def test_batter_carries_both_heads(self, client, graded_batter):
+        rows = client.get(f"/swing/{graded_batter}").json()
+        assert rows
+        for row in rows:
+            assert isinstance(row["whiff_plane_value_per_100"], (int, float))
+            assert isinstance(row["attack_angle"], (int, float))
+
+    def test_unknown_batter_is_404_not_an_empty_list(self, client, health):
+        _needs(health, "mart_batter_swing")
+        assert client.get("/swing/1").status_code == 404
+
+    def test_leaderboard_is_sorted_by_the_requested_metric(self, client, health):
+        _needs(health, "mart_batter_swing")
+        rows = client.get(
+            "/swing", params={"metric": "whiff_plane_value_per_100", "min_swings": 200, "limit": 20}
+        ).json()
+        if len(rows) < 2:
+            pytest.skip("not enough qualified batters to check ordering")
+        values = [r["whiff_plane_value_per_100"] for r in rows]
+        assert values == sorted(values, reverse=True)
+
+    def test_leaderboard_respects_the_sample_size_floor(self, client, health):
+        _needs(health, "mart_batter_swing")
+        rows = client.get("/swing", params={"min_swings": 400, "limit": 50}).json()
+        assert all(r["whiff_swings"] >= 400 for r in rows)
+
+    def test_an_arbitrary_metric_cannot_reach_the_order_by(self, client, health):
+        _needs(health, "mart_batter_swing")
+        r = client.get("/swing", params={"metric": "pitches; DROP TABLE dim_player"})
+        assert r.status_code == 400
+
+
+@pytest.fixture(scope="module")
+def graded_catcher(client: TestClient, health: dict) -> int:
+    _needs(health, "mart_catcher_framing")
+    rows = client.get("/framing/catchers", params={"limit": 1, "min_pitches": 500}).json()
+    if not rows:
+        pytest.skip("no graded catcher-seasons above the leaderboard threshold")
+    return rows[0]["mlbam_id"]
+
+
+class TestFraming:
+    """Catcher framing runs and umpire zone edge, backed by mart_catcher_framing
+    and mart_umpire_zone."""
+
+    def test_catcher_detail(self, client, graded_catcher):
+        rows = client.get(f"/framing/catchers/{graded_catcher}").json()
+        assert rows
+        assert isinstance(rows[0]["framing_runs"], (int, float))
+
+    def test_unknown_catcher_is_404_not_an_empty_list(self, client, health):
+        _needs(health, "mart_catcher_framing")
+        assert client.get("/framing/catchers/1").status_code == 404
+
+    def test_catcher_leaderboard_is_sorted_by_framing_runs(self, client, health):
+        _needs(health, "mart_catcher_framing")
+        rows = client.get("/framing/catchers", params={"min_pitches": 500, "limit": 20}).json()
+        if len(rows) < 2:
+            pytest.skip("not enough qualified catchers to check ordering")
+        values = [r["framing_runs"] for r in rows]
+        assert values == sorted(values, reverse=True)
+
+    def test_umpire_leaderboard_carries_a_name(self, client, health):
+        _needs(health, "mart_umpire_zone")
+        rows = client.get("/framing/umpires", params={"min_pitches": 500, "limit": 20}).json()
+        if not rows:
+            pytest.skip("no qualified umpire-seasons")
+        assert rows[0]["full_name"]
+
+    def test_umpire_leaderboard_is_sorted_by_edge_magnitude(self, client, health):
+        _needs(health, "mart_umpire_zone")
+        rows = client.get("/framing/umpires", params={"min_pitches": 500, "limit": 20}).json()
+        if len(rows) < 2:
+            pytest.skip("not enough qualified umpires to check ordering")
+        magnitudes = [abs(r["edge"]) for r in rows]
+        assert magnitudes == sorted(magnitudes, reverse=True)

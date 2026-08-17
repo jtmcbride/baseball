@@ -102,6 +102,50 @@ export interface StuffRow {
 
 export const ALL_PITCHES = "ALL";
 
+/**
+ * A row of `mart_batter_swing`. Both heads share one row per batter-season —
+ * `whiff_plane_value_per_100` is whiffs avoided per 100 swings (positive is
+ * good), `contact_plane_value_per_100` is xwOBA-on-contact points per 100
+ * swings, in the same "swing this plane vs. a league-median plane against the
+ * same pitches" counterfactual.
+ */
+export interface SwingRow {
+  mlbam_id: number;
+  season: number;
+  attack_angle: number;
+  whiff_plane_value_per_100: number;
+  whiff_swings: number;
+  contact_plane_value_per_100: number | null;
+  contact_swings: number | null;
+  full_name?: string;
+}
+
+/** A row of `mart_catcher_framing`: one catcher-season's framing runs. */
+export interface FramingRow {
+  mlbam_id: number;
+  season: number;
+  framing_runs: number;
+  n: number;
+  full_name?: string;
+}
+
+/**
+ * A row of `mart_umpire_zone`: actual vs. expected called-strike rate on
+ * borderline takes for one umpire-season, plus the same framing-runs formula
+ * grouped by umpire instead of catcher.
+ */
+export interface UmpireZoneRow {
+  mlbam_id: number;
+  season: number;
+  actual_rate: number;
+  expected_rate: number;
+  n: number;
+  edge: number;
+  framing_runs: number | null;
+  framing_n: number | null;
+  full_name?: string;
+}
+
 export interface ZoneExtent {
   grid_n: number;
   x_min: number; x_max: number;
@@ -207,6 +251,14 @@ export const api = {
   arsenal: (id: number, season?: number) => json<ArsenalRow[]>(`/players/${id}/arsenal`, { season }),
   stuff: (id: number, season?: number) => json<StuffRow[]>(`/stuff/${id}`, { season }),
   stuffLeaders: (params: Record<string, unknown>) => json<StuffRow[]>("/stuff", params),
+  swing: (id: number, season?: number) => json<SwingRow[]>(`/swing/${id}`, { season }),
+  swingLeaders: (params: Record<string, unknown>) => json<SwingRow[]>("/swing", params),
+  catcherFraming: (id: number, season?: number) =>
+    json<FramingRow[]>(`/framing/catchers/${id}`, { season }),
+  catcherFramingLeaders: (params: Record<string, unknown>) =>
+    json<FramingRow[]>("/framing/catchers", params),
+  umpireLeaders: (params: Record<string, unknown>) =>
+    json<UmpireZoneRow[]>("/framing/umpires", params),
   zoneExtent: () => json<ZoneExtent>("/zones/extent"),
   zones: (id: number, role: string, metric: string, season?: number) =>
     json<ZoneGrid>(`/zones/${id}`, { role, metric, season }),

@@ -19,11 +19,19 @@ LAKE_TABLES: dict[str, str] = {
     "dim_team": "dim_team/*.parquet",
     "dim_game": "dim_game/*.parquet",
     "dim_player_ids": "dim_player_ids/*.parquet",
+    # Written by `bb build officials` from the raw Stats API boxscore drop, not
+    # from Statcast — see `bbetl.transforms.officials`.
+    "dim_official": "dim_official/*.parquet",
     "mart_zone_profile": "mart_zone_profile/*.parquet",
-    # Written by `bb-ml stuff` (bbml.marts), not by a SQL mart — producing a row
-    # means scoring every pitch through three boosters. Registered here so a
-    # plain `bb build register` still picks it up.
+    # Written by `bb-ml stuff`/`bb-ml swing`/`bb-ml called-strike` (bbml.marts),
+    # not by a SQL mart — producing a row means scoring every pitch through a
+    # trained model. Each of these also self-registers right after writing
+    # (`marts._register_table`); listed here too so a plain `bb build register`
+    # recovers them without rerunning training.
     "mart_pitcher_stuff": "mart_pitcher_stuff/*.parquet",
+    "mart_batter_swing": "mart_batter_swing/*.parquet",
+    "mart_catcher_framing": "mart_catcher_framing/*.parquet",
+    "mart_umpire_zone": "mart_umpire_zone/*.parquet",
 }
 
 
