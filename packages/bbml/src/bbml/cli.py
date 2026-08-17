@@ -293,6 +293,86 @@ def train_swing_path(
     console.print(table)
 
 
+@app.command("called-strike")
+def train_called_strike(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+    rounds: Annotated[int, typer.Option(help="Max boosting rounds.")] = 1000,
+    min_pitches: Annotated[int, typer.Option(help="Catcher/umpire qualifier.")] = 500,
+) -> None:
+    """Train the called-strike model and report catcher framing runs.
+
+    Needs `dim_official` for umpire ids — run `bb ingest officials` then
+    `bb build officials` first if the umpire column comes back all null.
+    """
+    import polars as pl
+
+    from bbml import datasets as ds
+    from bbml.features.called_strike import CATCHER_COLUMN, UMPIRE_COLUMN, build_called_strike_frame
+    from bbml.features.run_value import RunValue
+    from bbml.features.stuff import load_pitch_frame
+    from bbml.models.called_strike import CalledStrikeModel, evaluate, framing_runs
+    from bbml.registry import save_model
+
+    frame = build_called_strike_frame(seasons=list(season) if season else None).sort(
+        ["game_date", "game_pk", "at_bat_number", "pitch_number"]
+    )
+    # check_features=False: this model reads the pitch itself, same reasoning
+    # as the pitch-quality and swing-path models.
+    split = ds.auto_split(frame, check_features=False)
+
+    # RunValue needs the WHOLE plate appearance — including the swings this
+    # taken-pitches-only frame drops — to know how each one actually ended, so
+    # it is fit on a separate load rather than on `split.train`.
+    train_seasons = sorted(split.train["season"].unique().to_list())
+    rv = RunValue.fit(load_pitch_frame(seasons=train_seasons))
+
+    model = CalledStrikeModel().fit(split.train, split.val, num_boost_round=rounds)
+    ev = evaluate(model, split.test)
+    console.print(
+        f"log_loss={ev.log_loss:.4f}  auc={ev.auc:.4f}  ece={ev.ece:.4f}  n={ev.n:,}"
+    )
+
+    directory = save_model(
+        model,
+        "called_strike",
+        params={"rounds": rounds, "best_iteration": model.best_iteration},
+        metrics={"log_loss": ev.log_loss, "auc": ev.auc, "ece": ev.ece},
+    )
+    rv.save(directory / "run_value.json")
+    console.print(f"[dim]saved {directory}[/dim]")
+
+    framing = framing_runs(split.test, model, rv, group_col=CATCHER_COLUMN, min_pitches=min_pitches)
+    table = Table(title="catcher framing runs (test season)")
+    for col in ("catcher", "framing runs", "n"):
+        table.add_column(col, justify="right" if col != "catcher" else "left")
+    for row in framing.head(5).iter_rows(named=True):
+        table.add_row(str(row[CATCHER_COLUMN]), f"{row['framing_runs']:+.2f}", f"{row['n']:,}")
+    console.print(table)
+
+    n_umpires = split.test.filter(pl.col(UMPIRE_COLUMN).is_not_null()).height
+    if n_umpires == 0:
+        console.print(
+            "[yellow]No umpire ids in the test split — dim_official missing or "
+            "not joined. Framing runs above are catcher-only.[/yellow]"
+        )
+
+    build_called_strike_marts(season=list(season) if season else None)
+
+
+@app.command("called-strike-mart")
+def build_called_strike_marts(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+) -> None:
+    """Score every take with the registered model and rebuild the catcher
+    framing and umpire zone marts."""
+    from bbml.marts import build_catcher_framing_mart, build_umpire_zone_mart
+
+    catcher = build_catcher_framing_mart(seasons=list(season) if season else None)
+    umpire = build_umpire_zone_mart(seasons=list(season) if season else None)
+    console.print(f"[green]mart_catcher_framing: {catcher.height} rows[/green]")
+    console.print(f"[green]mart_umpire_zone: {umpire.height} rows[/green]")
+
+
 @app.command("status")
 def status() -> None:
     """Show which model versions are registered."""
@@ -310,6 +390,7 @@ def status() -> None:
         "pitching_plus",
         "swing_whiff",
         "swing_contact",
+        "called_strike",
     ):
         d = s.models_dir / name
         version = latest_version(name, settings=s) if d.exists() else None

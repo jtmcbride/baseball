@@ -1,14 +1,15 @@
 # Development bookmark
 
 **Paused:** 2026-08-16 · **M1 and M2 complete and visually verified end-to-end.
-Three M3 items pulled forward and finished: the 3D pitch trajectory (viz #6),
-Stuff+ / Location+ / Pitching+ (model #3), and the swing-path model (model #4).**
+Four M3 items pulled forward and finished: the 3D pitch trajectory (viz #6),
+Stuff+ / Location+ / Pitching+ (model #3), the swing-path model (model #4), and
+the called-strike model (model #5).**
 The full 2015-2026 backfill has landed (9,202,082 pitches, contiguous) and
 every model has been retrained on it — see "Full lake rebuild + retrain" below
 for the numbers, several of which overturned earlier guesses in this file.
-Officials data (umpire per game) is also fully ingested now (11,154 games),
-unblocking model #5 (called-strike probability / framing) whenever that's
-picked up.
+Officials data (umpire per game) is fully ingested (11,154 games) **and now
+materialized into the lake** as `dim_official` — see "Called-strike model"
+below for what that unblocked.
 
 Read this first in a new session, then `README.md` for how the thing works and
 `~/.claude/plans/i-m-building-an-interactive-zany-ember.md` for the full
@@ -21,20 +22,20 @@ architecture plan and the M3 backlog.
 | Layer | State |
 |---|---|
 | `packages/bbcore` | Config + `Warehouse` adapter (DuckDB). Postgres impl deliberately absent — M3. |
-| `packages/bbetl` | Savant / Stats API / Chadwick clients, transforms, marts, quality suite. Complete. |
-| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, `RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3), **`SwingPathModel` (whiff + contact heads, matched-counterfactual `plane_value`, M3 model #4 — see below)**, `registry.py` (versioned artifacts + optional MLflow), `marts.py`, `bb-ml` CLI. |
-| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/{id}` + `/stuff` leaderboard added. 14 routes total, JSON + Arrow IPC. **No swing-path route yet** — model #4 is trained and registered but not exposed via the API or UI. |
-| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), **3D pitch trajectory** (viz #6), **pitch quality panel** (model #3). Visually verified. No swing-path surface yet. |
+| `packages/bbetl` | Savant / Stats API / Chadwick clients, transforms, marts, quality suite. **Now includes `transforms/officials.py` (`dim_official`, home-plate umpire per game — see below).** Complete. |
+| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, `RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3), `SwingPathModel` (whiff + contact heads, matched-counterfactual `plane_value`, M3 model #4), **`CalledStrikeModel` (binary, `framing_runs` + `umpire_zone_rate`, M3 model #5 — see below)**, `registry.py` (versioned artifacts + optional MLflow), `marts.py` (now also `mart_catcher_framing` / `mart_umpire_zone`), `bb-ml` CLI. |
+| `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/{id}` + `/stuff` leaderboard added. 14 routes total, JSON + Arrow IPC. **No swing-path or called-strike route yet** — models #4 and #5 are trained, registered, and (for #5) marted, but neither is exposed via the API or UI. |
+| `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), **3D pitch trajectory** (viz #6), **pitch quality panel** (model #3). Visually verified. No swing-path or called-strike surface yet. |
 
-**Verification status:** 147 backend Python tests (bbcore/bbetl/bbml/api,
-including 18 new swing-path tests) + 18 frontend tests, `tsc --noEmit`,
-`oxlint`, `ruff check`, `bb check` (data quality — all error-level checks
-pass), `bb-ml status` all pass/registered. All seven models retrained on the
-full 9,202,082-pitch 2015-2026 lake (see "Full lake rebuild + retrain" below)
-and saved to
-`data/models/{next_pitch,location,stuff_plus,location_plus,pitching_plus,swing_whiff,swing_contact}/`.
-**The rendered UI has been visually verified** (Playwright/Chromium
-screenshots, light + dark, `Tarik Skubal`) — see below. That verification
+**Verification status:** 191 backend Python tests (bbcore/bbetl/bbml/api,
+including 23 new called-strike tests and 3 new `dim_official` transform tests)
++ 18 frontend tests, `tsc --noEmit`, `oxlint`, `ruff check`, `bb check` (data
+quality — all error-level checks pass), `bb-ml status` all pass/registered.
+All seven prior models retrained on the full 9,202,082-pitch 2015-2026 lake
+(see "Full lake rebuild + retrain" below) and saved to
+`data/models/{next_pitch,location,stuff_plus,location_plus,pitching_plus,swing_whiff,swing_contact}/`,
+plus the new `called_strike/`. **The rendered UI has been visually verified**
+(Playwright/Chromium screenshots, light + dark, `Tarik Skubal`) — see below. That verification
 predates the swing-path model, which has no UI yet to verify.
 
 ---
@@ -340,15 +341,80 @@ both heads and prints a plane-value leaderboard; that's as far as it goes today.
 
 ---
 
+## Called-strike model (2026-08-16) — M3 model #5: framing runs, from scratch
+
+`features/called_strike.py` + `models/called_strike.py`. Binary classifier:
+P(called strike) on TAKES only (`is_swing=false`, description in
+ball/called_strike/blocked_ball — a hit-by-pitch is excluded, it's not a
+ball/strike decision). Inputs are the pitch as it crossed the plate — location
+(mirrored to `plate_x_out`, same convention as `stuff.py`), `plate_z_norm`,
+movement, velocity, count, `pitch_type` as a bare label. **Catcher and umpire
+are deliberately not features** — same principle as keeping `pitcher` out of
+next-pitch: the entity `framing_runs` grades can't be an input to the model
+doing the grading, or the residual collapses toward the entity's own skill.
+
+**Numbers on the full lake, contiguous split (train <=2024 / val 2025 / test
+2026):** AUC **0.988**, log-loss **0.134**, ECE **0.017** on 283,652 held-out
+takes. ECE — not AUC — is the metric that gates this model for actual use:
+`framing_runs` sums `(actual - p)` per catcher, so a probability that's off by
+a constant amount manufactures fake *uniform* framing value league-wide even
+with perfect ranking. 0.017 clears the 0.03 test gate comfortably.
+
+**Framing runs formula reuses `RunValue` rather than building a new table:**
+`RunValue.marginal_strike_value(balls, strikes)` — a new method, not a new
+model — is the run-expectancy swing between a take being called a ball vs a
+strike at that count, built from the same count run-expectancy table
+Stuff+/Location+/Pitching+ already fit. `framing_runs = Sum (actual_strike -
+P(strike)) * marginal_strike_value(count)`, grouped by catcher or by umpire.
+Terminal counts (3-2 ball -> walk, *-2 strike -> strikeout) route to
+`event_value`, not a missing `count_re` entry — the one subtlety worth
+remembering if this ever needs re-deriving.
+
+**Validation, not just a metric:**
+- **YoY catcher stability** (732 catcher-season pairs): Spearman **0.53** —
+  inside the 0.5-0.7 range published framing metrics report. Evidence this is
+  measuring a real, sticky catcher property rather than single-season noise.
+- **Named-catcher sanity check** (career framing runs, >=3,000 takes,
+  2015-2026): top 3 are **Yasmani Grandal, Austin Hedges, Tyler Flowers** —
+  the actual best-known elite framers in the sport over this window. Bottom
+  is led by **Salvador Perez, Elias Díaz, Shea Langeliers** — also matches
+  public reputation. Not tuned to produce this; it's what the residual says.
+- **Umpire zone-edge spread** (borderline takes, 0.2<=P(strike)<=0.8, 86
+  umpires with >=1,000 such takes): edge (actual - expected borderline strike
+  rate) SD **0.0385** — real, but smaller than the catcher spread, consistent
+  with the earlier zone-expansion finding that umpires are the tightest of
+  the three entities (batter/pitcher/umpire) on borderline calls.
+
+**`dim_official` now exists** (`bbetl/transforms/officials.py`, `bb build
+officials`) — the 11,154-game officials ingest from last session had never
+been turned into a lake table before this; the raw JSON just sat in
+`data/raw/officials/`. This is also the deferred zone-expansion umpire rerun:
+`dim_official` is the input that analysis needed and didn't have.
+
+**Two new marts**, scored by the registered model and rebuilt by `bb-ml
+called-strike-mart` (also runs automatically at the end of `bb-ml
+called-strike`): `mart_catcher_framing` (1,048 rows, catcher x season) and
+`mart_umpire_zone` (238 rows, umpire x season) — the data viz #20 (catcher
+framing map) and viz #13 (umpire zone map) need. Neither visualization is
+built yet.
+
+Not yet done: no API route, no UI panel, no viz #20/#13. `bb-ml called-strike`
+trains, registers, and prints a framing-runs leaderboard; `bb-ml
+called-strike-mart` rebuilds the two marts standalone.
+
+---
+
 ## Current local data
 
 - **9,202,082 pitches**, seasons 2015-2026, contiguous — the full backfill
   finally landed (see above). No more season gaps.
 - Marts: `mart_pitcher_stuff` 40,539 rows (pitcher x season x pitch_type + an
-  `ALL` rollup). `mart_pitcher_arsenal` / `mart_zone_profile` not re-counted
-  this session — re-run `bb check --coverage` before trusting the old figures
-  below.
-- Officials: **11,154 games** with a home-plate umpire (`bb ingest
+  `ALL` rollup); `mart_catcher_framing` 1,048 rows (catcher x season);
+  `mart_umpire_zone` 238 rows (umpire x season). `mart_pitcher_arsenal` /
+  `mart_zone_profile` not re-counted this session — re-run `bb check
+  --coverage` before trusting the old figures below.
+- Officials: **11,154 games** with a home-plate umpire, now materialized as
+  `dim_official` in the lake (`bb ingest officials` then `bb build
   officials`), full coverage.
 
 **Bug found and fixed while building this:** `enrich()` crashed with `division
@@ -372,14 +438,16 @@ needed, but there is no gap left to fill right now.
 
 ## Committed
 
-`git log` (newest first): M3 model #3 (`f979595`), 3D pitch trajectory work
+`git log` (newest first): the swing-path model + `vaa_deg`/`haa_deg` (`a6a987e`),
+M3 model #3 (`f979595`), 3D pitch trajectory work
 (`4b77e20`/`d3d9c2f`/`782a5b5`), the zstd Arrow fix (`cbf07a8`), an earlier
 STATUS.md update (`4694c91`), the schema-overrides fix (`20d776b`), `make
 train` (`3455af5`), M2 (`00d8ad9`), the first bbml package (`67e2e16`), and M1
-(`6e0d555`). This session's work — `vaa_deg`/`haa_deg` in the transform layer,
-the swing-path model (model #4) and its matched-counterfactual fix, and this
-STATUS.md update — lands in the commit right after this one; check `git log`
-rather than trusting this list to stay current.
+(`6e0d555`). This session's work — the called-strike model (model #5),
+`dim_official`/`bb build officials`, `RunValue.marginal_strike_value`, the
+`mart_catcher_framing`/`mart_umpire_zone` marts, and this STATUS.md update —
+lands in the commit right after this one; check `git log` rather than
+trusting this list to stay current.
 
 ---
 
@@ -452,18 +520,23 @@ Still open from that list:
   rebuild + retrain" above), then answer the Stuff+ predictive-validity
   question on a proper contiguous split.
 
-**M3, in progress:** model #3 (Stuff+/Location+/Pitching+) and model #4
-(swing-path) are both done — see above for both. Model #4 has no API route or
-UI panel yet; that's the fastest next win if the goal is a shippable feature
-rather than a new model. Model #5 (called-strike probability -> catcher
-framing + umpire zone maps) is fully scoped and ready to start now that
-officials data is complete — the plan is written up in the assistant's
-project memory (`baseball-model5-called-strike-plan`), not re-derived here to
-avoid drift between two copies. Also queued: re-run the zone-expansion
-umpire analysis with the complete 11,154-game officials data (the published
-artifact used a partial 92-umpire sample). Still not started: live game-feed
-mode, `PostgresWarehouse`, model #2 (arsenal re-classification), viz 7-8,
-10-20, Retrosheet backfill.
+**M3, in progress:** models #3 (Stuff+/Location+/Pitching+), #4 (swing-path),
+and #5 (called-strike / framing) are all done — see above for all three.
+Neither #4 nor #5 has an API route or UI panel yet; that's the fastest next
+win if the goal is a shippable feature rather than a new model — #5 also
+unlocks two visualizations once it has one (viz #20 catcher framing map, viz
+#13 umpire zone map — both marts are already built, see above). The
+previously-queued zone-expansion umpire rerun is superseded: `dim_official`
+now exists and the called-strike model's own validation (YoY stability,
+named-catcher check) is the more rigorous version of that question — no need
+to separately rerun the old artifact's analysis. Model #5's plan is still in
+the assistant's project memory (`baseball-model5-called-strike-plan`) if the
+detail behind a design choice is needed; the plan itself is now executed, not
+just scoped. Still not started: live game-feed mode, `PostgresWarehouse`,
+model #2 (arsenal re-classification), model #6 (swing decision, needs #5's
+P(strike) as RV(take) — now unblocked) and model #15 (ABS counterfactual,
+also now unblocked), viz 7-8, 10-12, 14-20 minus #13/#20's marts, Retrosheet
+backfill.
 
 ---
 
@@ -509,9 +582,11 @@ mode, `PostgresWarehouse`, model #2 (arsenal re-classification), viz 7-8,
 - **Savant revises published data** after the fact. `bb ingest refresh` re-pulls a
   trailing window; append-only ingest goes stale invisibly.
 - **Statcast's `umpire` column is empty in every season.** Umpires come from the
-  Stats API boxscore (`bb ingest officials`), one request per game — needed for
-  the framing/called-strike models. Fully ingested now (11,154 games, model #5
-  ready to start).
+  Stats API boxscore (`bb ingest officials`), one request per game, landed as
+  raw JSON only — `bb build officials` is the separate step that turns that
+  into the queryable `dim_official` lake table. The raw JSON sat unbuilt for a
+  full session before model #5 needed it; if `UMPIRE_COLUMN` comes back all
+  null, this is the step that was skipped.
 - **DuckDB persists a view's resolved schema.** Rebuilding the lake with a changed
   column set leaves stale views that fail confusingly. `build pitches` now
   re-registers automatically; keep it that way.

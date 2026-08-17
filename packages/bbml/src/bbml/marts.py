@@ -17,8 +17,10 @@ import polars as pl
 
 from bbcore.config import Settings, get_settings
 from bbcore.logging import get_logger
+from bbml.features.called_strike import CATCHER_COLUMN, UMPIRE_COLUMN, build_called_strike_frame
 from bbml.features.run_value import RunValue
 from bbml.features.stuff import ROLES, TARGET_RUN_VALUE, build_pitch_quality_frame
+from bbml.models.called_strike import CalledStrikeModel, framing_runs, umpire_zone_rate
 from bbml.models.pitch_quality import PitchQualityModel
 from bbml.registry import latest_dir
 
@@ -110,7 +112,105 @@ def build_pitch_quality_mart(
     return out
 
 
-def _register(settings: Settings) -> None:
+MART_CATCHER_FRAMING = "mart_catcher_framing"
+MART_UMPIRE_ZONE = "mart_umpire_zone"
+
+# Season grain, so lower than the swing-path batter qualifier: even a backup
+# catcher clears this most seasons, and a season with fewer takes than this is
+# one nobody should be drawing a framing conclusion from anyway.
+MIN_CATCHER_PITCHES = 500
+MIN_UMPIRE_PITCHES = 500
+
+
+def load_called_strike_model() -> tuple[CalledStrikeModel, RunValue]:
+    """The registered called-strike model, with the `RunValue` table it shipped
+    with — see `PitchQualityModel`'s equivalent note on why the target
+    definition rides along with the artifact rather than being refit."""
+    directory = latest_dir("called_strike")
+    if directory is None:
+        raise FileNotFoundError(
+            "No registered called_strike model. Run `bb-ml called-strike` first."
+        )
+    model = CalledStrikeModel.load(directory)
+    rv = RunValue.load(directory / "run_value.json")
+    return model, rv
+
+
+def build_catcher_framing_mart(
+    *,
+    seasons: list[int] | None = None,
+    min_pitches: int = MIN_CATCHER_PITCHES,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """`mart_catcher_framing`: framing runs per catcher x season (viz #20)."""
+    s = settings or get_settings()
+    model, rv = load_called_strike_model()
+    frame = build_called_strike_frame(seasons=seasons, settings=s)
+    if frame.height == 0:
+        log.warning("no taken pitches to score")
+        return pl.DataFrame()
+
+    rows = [
+        framing_runs(part, model, rv, group_col=CATCHER_COLUMN, min_pitches=min_pitches).with_columns(
+            pl.lit(season).alias("season")
+        )
+        for (season,), part in frame.group_by("season", maintain_order=True)
+    ]
+    out = (
+        pl.concat(rows)
+        .rename({CATCHER_COLUMN: "mlbam_id"})
+        .sort(["season", "framing_runs"], descending=[False, True])
+    )
+    _write(out, MART_CATCHER_FRAMING, s)
+    return out
+
+
+def build_umpire_zone_mart(
+    *,
+    seasons: list[int] | None = None,
+    min_pitches: int = MIN_UMPIRE_PITCHES,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """`mart_umpire_zone`: actual-vs-expected borderline strike rate per umpire
+    x season (viz #13), plus the same framing-runs formula grouped by umpire
+    instead of catcher."""
+    s = settings or get_settings()
+    model, rv = load_called_strike_model()
+    frame = build_called_strike_frame(seasons=seasons, settings=s)
+    if frame.height == 0:
+        log.warning("no taken pitches to score")
+        return pl.DataFrame()
+
+    rows = [
+        umpire_zone_rate(part, model, min_pitches=min_pitches)
+        .join(
+            framing_runs(
+                part, model, rv, group_col=UMPIRE_COLUMN, min_pitches=min_pitches
+            ).rename({"n": "framing_n"}),
+            on=UMPIRE_COLUMN,
+            how="left",
+        )
+        .with_columns(pl.lit(season).alias("season"))
+        for (season,), part in frame.group_by("season", maintain_order=True)
+    ]
+    out = (
+        pl.concat(rows)
+        .rename({UMPIRE_COLUMN: "mlbam_id"})
+        .sort(["season", "edge"], descending=[False, True])
+    )
+    _write(out, MART_UMPIRE_ZONE, s)
+    return out
+
+
+def _write(df: pl.DataFrame, name: str, settings: Settings) -> None:
+    out_dir = settings.lake_dir / name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(out_dir / "part_0.parquet", compression="zstd", statistics=True)
+    log.info("wrote %d rows -> %s", df.height, out_dir)
+    _register_table(name, settings)
+
+
+def _register_table(name: str, settings: Settings) -> None:
     """Best effort. The lake file is the deliverable; the view is a convenience.
 
     `open_warehouse` takes an exclusive lock, so this fails whenever the API
@@ -121,12 +221,16 @@ def _register(settings: Settings) -> None:
 
     try:
         with open_warehouse(settings=settings) as wh:
-            wh.register_lake_table(MART_TABLE, f"{MART_TABLE}/*.parquet")
-        log.info("registered %s in the warehouse", MART_TABLE)
+            wh.register_lake_table(name, f"{name}/*.parquet")
+        log.info("registered %s in the warehouse", name)
     except Exception as exc:
         log.warning(
             "could not register %s (%s). The Parquet is written; run `bb build register` "
             "with the API stopped.",
-            MART_TABLE,
+            name,
             exc,
         )
+
+
+def _register(settings: Settings) -> None:
+    _register_table(MART_TABLE, settings)

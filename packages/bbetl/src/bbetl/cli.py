@@ -200,6 +200,21 @@ def build_marts(
     console.print(table)
 
 
+@build_app.command("officials")
+def build_officials_cmd() -> None:
+    """Build `dim_official` from landed officials JSON.
+
+    Run `bb ingest officials` first — this only transforms what has already
+    been fetched, it does not crawl.
+    """
+    from bbetl.transforms.officials import build_dim_official
+
+    s = get_settings()
+    s.ensure_dirs()
+    df = build_dim_official(settings=s)
+    console.print(f"dim_official: [green]{df.height:,}[/green] games")
+
+
 @build_app.command("all")
 def build_everything() -> None:
     """fact_pitch -> register -> marts, in order."""

@@ -220,6 +220,36 @@ class RunValue:
             "_count_key", "_next_count_key", "_is_last", "terminal_value"
         )
 
+    def marginal_strike_value(self, balls: pl.Series, strikes: pl.Series) -> np.ndarray:
+        """Run-expectancy swing (batting side) between a take being called a
+        ball vs a strike at this count — `strike_value(count)` in the framing
+        runs formula (`models/called_strike.py`): a positive number is how
+        costly a strike call is to the batter here, relative to a ball call.
+
+        Built once per `(balls, strikes)` pair rather than looked up directly
+        in `count_re`, because terminal counts have no entry there: a ball at
+        3-2 is a walk and a strike at *-2 is a strikeout, neither a reachable
+        in-progress count. Those route to `event_value` instead — the same
+        branch `attach`'s `_terminal_value_expr` takes for the last pitch of a
+        plate appearance.
+        """
+        table: dict[str, float] = {}
+        for b in range(MAX_BALLS + 1):
+            for s in range(MAX_STRIKES + 1):
+                ball_call = (
+                    self.event_value.get("walk", float("nan"))
+                    if b + 1 > MAX_BALLS
+                    else self.count_re.get(f"{b + 1}-{s}", float("nan"))
+                )
+                strike_call = (
+                    self.event_value.get("strikeout", float("nan"))
+                    if s + 1 > MAX_STRIKES
+                    else self.count_re.get(f"{b}-{s + 1}", float("nan"))
+                )
+                table[f"{b}-{s}"] = ball_call - strike_call
+        key = _count_key(balls, strikes)
+        return key.replace_strict(table, default=None).to_numpy().astype(float)
+
     # --- persistence ---------------------------------------------------------
 
     def to_dict(self) -> dict:
