@@ -396,6 +396,47 @@ def build_called_strike_marts(
     console.print(f"[green]mart_zone_profile (umpire): {umpire_grid.height} grids[/green]")
 
 
+@app.command("arsenal")
+def arsenal_clusters(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+    min_pitches: Annotated[int, typer.Option(help="Pitcher-season qualifier.")] = 200,
+) -> None:
+    """Re-derive each pitcher-season's arsenal from physical shape (GMM, BIC-
+    selected k) and rebuild `mart_pitcher_arsenal_clusters` (M3 model #2).
+
+    No training step, no registered artifact — a small model is fit per
+    pitcher-season, same shape as the zone-profile grids. Prints the
+    pitcher-seasons where this disagrees most with Savant's own `pitch_type`
+    labels (largest |arsenal_size_diff|) so a run is spot-checkable without
+    opening the Parquet.
+    """
+    from bbml.marts import build_arsenal_cluster_mart
+
+    mart = build_arsenal_cluster_mart(seasons=list(season) if season else None, min_pitches=min_pitches)
+    console.print(f"[green]mart_pitcher_arsenal_clusters: {mart.height} rows[/green]")
+    if mart.height == 0:
+        return
+
+    import polars as pl
+
+    per_season = mart.unique(subset=["mlbam_id", "season"]).with_columns(
+        pl.col("arsenal_size_diff").abs().alias("_abs_diff")
+    )
+    table = Table(title="Largest disagreements with Savant's pitch_type (|arsenal_size_diff|)")
+    for col in ("pitcher", "season", "cluster_k", "savant_pitch_types", "arsenal_size_diff", "season_purity"):
+        table.add_column(col, justify="right" if col != "pitcher" else "left")
+    for row in per_season.sort("_abs_diff", descending=True).head(10).iter_rows(named=True):
+        table.add_row(
+            str(row["mlbam_id"]),
+            str(row["season"]),
+            str(row["cluster_k"]),
+            str(row["savant_pitch_types"]),
+            f"{row['arsenal_size_diff']:+d}",
+            f"{row['season_purity']:.2f}",
+        )
+    console.print(table)
+
+
 @app.command("status")
 def status() -> None:
     """Show which model versions are registered."""

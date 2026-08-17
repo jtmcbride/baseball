@@ -19,6 +19,7 @@ import polars as pl
 from bbcore.config import Settings, get_settings
 from bbcore.logging import get_logger
 from bbetl.transforms.zones import GRID_N, MetricSpec, build_grid
+from bbml.features.arsenal import build_arsenal_frame
 from bbml.features.called_strike import (
     CATCHER_COLUMN,
     TARGET_CALLED_STRIKE,
@@ -28,6 +29,9 @@ from bbml.features.called_strike import (
 from bbml.features.run_value import RunValue
 from bbml.features.stuff import ROLES, TARGET_RUN_VALUE, build_pitch_quality_frame
 from bbml.features.swing import build_swing_frame
+from bbml.models.arsenal import MIN_PITCHES as ARSENAL_MIN_PITCHES
+from bbml.models.arsenal import MIN_RELIABLE_SEASON as ARSENAL_MIN_RELIABLE_SEASON
+from bbml.models.arsenal import build_arsenal_clusters
 from bbml.models.called_strike import CalledStrikeModel, framing_runs, umpire_zone_rate
 from bbml.models.pitch_quality import PitchQualityModel
 from bbml.models.swing_path import SwingPathModel, plane_value_by_batter
@@ -390,6 +394,44 @@ def _write_zone_grid(df: pl.DataFrame, filename: str, settings: Settings) -> Non
     df.write_parquet(out_dir / f"{filename}.parquet", compression="zstd", statistics=True)
     log.info("wrote %d %s zone grids -> %s", df.height, filename, out_dir)
     _register_table(MART_ZONE_PROFILE, settings)
+
+
+MART_ARSENAL_CLUSTERS = "mart_pitcher_arsenal_clusters"
+
+
+def build_arsenal_cluster_mart(
+    *,
+    seasons: list[int] | None = None,
+    min_pitches: int = ARSENAL_MIN_PITCHES,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """`mart_pitcher_arsenal_clusters`: pitcher x season x re-derived cluster
+    (M3 model #2). No model to load first — unlike `mart_pitcher_stuff` and
+    the called-strike marts, this fits a small model per pitcher-season
+    rather than scoring pitches through one registered artifact, the same
+    shape as the zone-profile grids in `bbetl.transforms.zones`.
+
+    `seasons=None` (the default) means 2020 onward, NOT the full 2015-2026
+    backfill every other mart in this file covers — see
+    `models.arsenal.MIN_RELIABLE_SEASON`. Pre-Hawk-Eye (2016-2019) tracking
+    measures this model's clustering features inconsistently enough that
+    mean |arsenal_size_diff| runs 2.8-3.2 in that era vs 0.8-1.2 from 2020 on
+    (measured on a full-history build, see `STATUS.md`). Pass an explicit
+    `seasons` list to include 2016-2019 anyway.
+    """
+    s = settings or get_settings()
+    frame = build_arsenal_frame(seasons=seasons, settings=s)
+    if seasons is None:
+        frame = frame.filter(pl.col("season") >= ARSENAL_MIN_RELIABLE_SEASON)
+    if frame.height == 0:
+        log.warning("no pitches to cluster")
+        return pl.DataFrame()
+
+    out = build_arsenal_clusters(frame, min_pitches=min_pitches).rename({"pitcher": "mlbam_id"})
+    if out.height == 0:
+        return out
+    _write(out, MART_ARSENAL_CLUSTERS, s)
+    return out
 
 
 def _write(df: pl.DataFrame, name: str, settings: Settings) -> None:

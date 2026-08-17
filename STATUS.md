@@ -1,17 +1,20 @@
 # Development bookmark
 
 **Paused:** 2026-08-16 · **M1 and M2 complete and visually verified end-to-end.
-Four M3 items pulled forward and finished: the 3D pitch trajectory (viz #6),
-Stuff+ / Location+ / Pitching+ (model #3), the swing-path model (model #4), and
-the called-strike model (model #5) — models #4/#5 have a full API + UI
-surface, and the two dedicated visualizations model #5 unlocked, viz #20
-(catcher framing map) and viz #13 (umpire zone map), are now built too.**
+Five M3 items pulled forward and finished: the 3D pitch trajectory (viz #6),
+arsenal re-classification (model #2 — four real bugs found and fixed, see
+"Arsenal re-classification" below), Stuff+ / Location+ / Pitching+ (model #3),
+the swing-path model (model #4), and the called-strike model (model #5) —
+models #4/#5 have a full API + UI surface, and the two dedicated
+visualizations model #5 unlocked, viz #20 (catcher framing map) and viz #13
+(umpire zone map), are now built too.**
 The full 2015-2026 backfill has landed (9,202,082 pitches, contiguous) and
 every model has been retrained on it — see "Full lake rebuild + retrain" below
 for the numbers, several of which overturned earlier guesses in this file.
 Officials data (umpire per game) is fully ingested (11,154 games) and
 materialized into the lake as `dim_official` — see "Called-strike model",
-"API + UI for models #4/#5", and "Viz #20/#13" below.
+"API + UI for models #4/#5", "Viz #20/#13", and "Arsenal re-classification"
+below.
 
 Read this first in a new session, then `README.md` for how the thing works and
 `~/.claude/plans/i-m-building-an-interactive-zany-ember.md` for the full
@@ -25,19 +28,24 @@ architecture plan and the M3 backlog.
 |---|---|
 | `packages/bbcore` | Config + `Warehouse` adapter (DuckDB). Postgres impl deliberately absent — M3. |
 | `packages/bbetl` | Savant / Stats API / Chadwick clients, transforms, marts, quality suite. **Now includes `transforms/officials.py` (`dim_official`, home-plate umpire per game — see below).** Complete. |
-| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, `RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3), `SwingPathModel` (whiff + contact heads, matched-counterfactual `plane_value`, M3 model #4), `CalledStrikeModel` (binary, `framing_runs` + `umpire_zone_rate`, M3 model #5), `registry.py` (versioned artifacts + optional MLflow), `marts.py` (`mart_batter_swing` / `mart_catcher_framing` / `mart_umpire_zone`, **plus the catcher/umpire spatial grids feeding `mart_zone_profile` — see "Viz #20/#13" below**), `bb-ml` CLI. Now depends on `bbetl` (reuses its zone-smoothing machinery) — added to `pyproject.toml`. |
+| `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, **arsenal re-classification (M3 model #2 — pairwise GMM merge/split tests against Savant's `pitch_type`, no registered artifact)**, `RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3), `SwingPathModel` (whiff + contact heads, matched-counterfactual `plane_value`, M3 model #4), `CalledStrikeModel` (binary, `framing_runs` + `umpire_zone_rate`, M3 model #5), `registry.py` (versioned artifacts + optional MLflow), `marts.py` (`mart_batter_swing` / `mart_catcher_framing` / `mart_umpire_zone` / **`mart_pitcher_arsenal_clusters`**, plus the catcher/umpire spatial grids feeding `mart_zone_profile` — see "Viz #20/#13" below), `bb-ml` CLI. Depends on `bbetl` (reuses its zone-smoothing machinery) — added to `pyproject.toml`. |
 | `apps/api` | `/predict/next-pitch` (what-if), `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/{id}` + `/stuff` leaderboard, `/swing/{id}` + `/swing` leaderboard, `/framing/catchers/{id}` + `/framing/catchers` leaderboard, `/framing/umpires` leaderboard, **`/zones/{id}` now also serves `role=catcher`/`role=umpire`** (no new route — the existing generic zone endpoint just grew two more valid roles/metrics). 24 routes total (`app.openapi()` operation count), JSON + Arrow IPC. |
 | `apps/web` | Filter bar, player search, 4 charts, arsenal table, at-bat replay strip (viz #9), 3D pitch trajectory (viz #6), pitch quality panel (model #3), swing-plane panel for batters (model #4), catcher-framing panel for catchers (model #5) **with an embedded zone map (viz #20)**, **a new standalone Umpires tab (viz #13) — umpire leaderboard + zone map with a marching-squares 50% contour overlay**. Visually verified, light + dark. |
 
-**Verification status:** 206 backend Python tests (bbcore/bbetl/bbml/api,
+**Verification status:** 223 backend Python tests (bbcore/bbetl/bbml/api,
 including 25 called-strike tests, 3 `dim_official` transform tests, 10
-swing/framing API contract tests, and **3 new `test_marts.py` tests for the
-viz #20/#13 grid-building helper's null-id-column filter**) + 23 frontend
-tests (**5 new for the marching-squares contour tracer**), `tsc --noEmit`,
+swing/framing API contract tests, 3 `test_marts.py` tests for the viz
+#20/#13 grid-building helper's null-id-column filter, and **17 new arsenal
+re-classification tests** — synthetic merge/split recovery, real-2025
+disagreement-rate and 2016-vs-2020+ reliability checks, a null-`pitch_type`
+regression, and the YoY stability check) + 23 frontend tests, `tsc --noEmit`,
 `oxlint`, `ruff check`, `bb check` (data quality — all
 error-level checks pass), `bb-ml status` all pass/registered. All eight
-models trained on the full 9,202,082-pitch 2015-2026 lake and saved to
-`data/models/{next_pitch,location,stuff_plus,location_plus,pitching_plus,swing_whiff,swing_contact,called_strike}/`.
+registered models trained on the full 9,202,082-pitch 2015-2026 lake and
+saved to
+`data/models/{next_pitch,location,stuff_plus,location_plus,pitching_plus,swing_whiff,swing_contact,called_strike}/`
+— arsenal re-classification has no registered artifact (see "Arsenal
+re-classification" below) so it isn't a ninth entry here.
 **The rendered UI has been visually verified** (Playwright/Chromium
 screenshots, light + dark) for the player page including the two new
 model #4/#5 panels — `Luis Arraez` (batter, swing plane) and `Jose Trevino`
@@ -568,6 +576,112 @@ session either).
 
 ---
 
+## Arsenal re-classification (2026-08-16) — M3 model #2: what does this pitcher actually throw?
+
+`features/arsenal.py` + `models/arsenal.py`. Savant's own `pitch_type` comes
+from an automated classifier with known failure modes at the boundary between
+similar shapes — a slider and a sweeper differ mainly by degree, not by kind,
+so one real blended pitch can get split across both labels, or two pitchers'
+genuinely different sliders can get merged under one. This model re-checks
+each pitcher-season's arsenal against Savant's labels and reports where and
+how much they disagree — it does not replace `pitch_type` anywhere else in
+the codebase.
+
+**This one took four real, measured wrongs before the design was sound —
+the fullest "measured, not assumed" story in this file.** All four are
+written up in full in the module docstrings (`models/arsenal.py`,
+`features/arsenal.py`); summarized here:
+
+1. **Unsupervised GMM+BIC from scratch never converged.** Fitting k=1..6
+   chosen by BIC over each pitcher-season's own pitches, no anchor to
+   Savant's labels: 632 of 640 qualifying 2025 pitcher-seasons hit the
+   component ceiling exactly. Switching to full covariance (diagonal was
+   letting BIC "explain" real feature correlation by adding clusters) and
+   capping the fit to a bounded subsample (BIC's penalty grows with log(n),
+   a season's pitch count does not) narrowed it but didn't fix it — a real
+   fastball still split into two near-identical clusters. **Redesigned** to
+   anchor the search in Savant's own labels: pairwise merge tests (does a
+   single Gaussian fit two Savant-labeled groups' union as well as two do?)
+   and per-group split tests (does one label clearly contain two
+   sub-populations?), both decided by the same 1-vs-2-component BIC test
+   requiring Kass & Raftery's "very strong evidence" bar (10 BIC units), not
+   merely "lower."
+2. **The anchored design still over-split — a date confound.** A pitcher's
+   single `FF` group still split with overwhelming evidence (BIC gap 200) at
+   two near-identical shapes; the two "clusters" turned out to be almost
+   perfectly separated by `game_date` (2025-03-27 to 2025-06-10 vs
+   2025-06-07 to 2025-07-29) — within-season drift, not two concurrently
+   thrown pitches. Fixed by rejecting any split whose two halves are
+   separated by date about as well as a rank-based AUC of 0.85 (measured on
+   this exact case: 0.002, i.e. essentially perfect chronological
+   separation).
+3. **A different pitcher's fastball, sinker, AND curveball all split the
+   same way — a release-point confound.** Comparing the split clusters
+   feature-by-feature: velocity, movement, and spin axis were all
+   essentially equal; only `release_pos_x_arm` differed (1.06ft vs 0.45ft).
+   A bimodal release point is real but is not a different pitch, and
+   including it as a clustering input let arm-slot variance masquerade as
+   an extra pitch on every pitch type a pitcher threw at once. Fixed by
+   dropping `release_extension`/`release_pos_x_arm`/`release_pos_z` from
+   the clustering features entirely — only velocity, movement, and spin
+   axis define "which pitch is this."
+4. **A full-history build's ten worst disagreements were *all* from
+   2016-2019 — a tracking-era discontinuity, not a model bug.** One
+   pitcher with 5 Savant pitch types came back as 13 clusters, 100% pure.
+   Checked season-by-season: mean `|arsenal_size_diff|` is 2.8-3.2 for
+   2016-2019 (only 14-23% of pitcher-seasons within +-1 of Savant) and drops
+   in a clean step, not a gradual trend, to 0.8-1.2 from 2020 on (65-83%
+   within +-1) — exactly the boundary where Statcast unified every park onto
+   one Hawk-Eye tracking system. A spot-checked 2019 pitcher's doubled
+   changeup wasn't explained by either earlier fix (date AUC 0.34, no
+   chronological pattern; differed in velocity, movement, *and* spin axis at
+   once, spread over 20+ games each side) — genuinely less consistent
+   pre-Hawk-Eye measurement. `build_arsenal_cluster_mart` now defaults to
+   2020+ (`MIN_RELIABLE_SEASON`) rather than the full backfill; 2016-2019 is
+   still reachable with an explicit `--season` range, documented as
+   unreliable rather than hidden.
+
+**Validated the same way the called-strike model's catcher framing was:**
+year-over-year Spearman correlation of `cluster_k` (arsenal size found),
+2023-2025, is **0.56-0.61** — in the 0.5-0.7 range published framing metrics
+report as real and sticky, not single-season noise. `arsenal_size_diff`
+(disagreement with Savant specifically) is weaker but still clearly positive,
+**0.27-0.30**, expected since it's a difference of two already-noisy counts.
+
+**Reliable usable range is 2020+, not the full 2015-2026 backfill** — unlike
+every other mart in this codebase; see finding #4 above. `spin_axis` also has
+0% coverage in 2015 specifically (`bb check --coverage`), so 2015 contributes
+zero rows on its own regardless (`build_arsenal_frame` filters it out
+cleanly, no crash). A separate, real bug did crash a full-history build:
+`pitch_type` can be null even after the tracked/competitive filter
+(`is_tracked_pitch & is_competitive` doesn't guarantee a pitch was ever
+classified), and `np.unique` can't sort `None` against strings —
+`mart_pitcher_arsenal.sql` already filtered this case; the Python rebuild had
+missed copying it. Fixed and pinned with a regression test on 2016 (the
+earliest season that reproduces it).
+
+**Caveat stated up front, not discovered:** `BIC_EVIDENCE_THRESHOLD` is a
+per-test bar, not corrected for how many pairwise tests a pitcher-season
+runs — an eight-pitch kitchen-sink starter gets 28 merge tests plus 8 split
+tests, a two-pitch reliever gets one. A spot-check of a real eight-pitch-type
+2025 pitcher found two additional splits that are individually
+well-evidenced but more likely to include a borderline case simply because
+more tests ran. No multiple-comparisons correction is applied (see the model
+docstring for why a stricter one would re-introduce the under-splitting
+failure mode the redesign already fixed).
+
+**`mart_pitcher_arsenal_clusters`** (pitcher x season x re-derived cluster):
+**19,855 rows, 4,212 pitcher-seasons, 2020-2026** — no registered model, no
+`bb-ml`-trained artifact — a small model is fit per pitcher-season, the same
+shape as the zone-profile grids (`bbetl.transforms.zones`), built by `bb-ml
+arsenal`. 69.75% of pitcher-seasons land within +-1 of Savant's own count
+(mean `|arsenal_size_diff|` 0.81-1.23 across every season 2020-2026, no
+remaining discontinuity). Not yet done: no API route, no UI panel, no viz
+#12 (UMAP arsenal map) — this session stopped at a validated model + mart,
+matching how model #5 shipped in stages.
+
+---
+
 ## Current local data
 
 - **9,202,082 pitches**, seasons 2015-2026, contiguous — the full backfill
@@ -579,9 +693,11 @@ session either).
   season 2015-2022, dropped by the bug fix in "API + UI for models #4/#5"
   above). `mart_zone_profile` now also holds **1,048 catcher-season grids and
   362 umpire-season grids** (viz #20/#13, see above) alongside its existing
-  batter/pitcher grids. `mart_pitcher_arsenal` / the batter/pitcher share of
-  `mart_zone_profile` not re-counted this session — re-run `bb check
-  --coverage` before trusting the old figures below.
+  batter/pitcher grids. **`mart_pitcher_arsenal_clusters` 19,855 rows, 4,212
+  pitcher-seasons, 2020-2026 only** (see "Arsenal re-classification" above —
+  reliable range, not the full backfill). `mart_pitcher_arsenal` / the
+  batter/pitcher share of `mart_zone_profile` not re-counted this session —
+  re-run `bb check --coverage` before trusting the old figures below.
 - Officials: **11,154 games** with a home-plate umpire, now materialized as
   `dim_official` in the lake (`bb ingest officials` then `bb build
   officials`), full coverage.
@@ -704,10 +820,15 @@ the more rigorous version of that question — no need to separately rerun the
 old artifact's analysis. Model #5's plan is still in the assistant's project
 memory (`baseball-model5-called-strike-plan`) if the detail behind a design
 choice is needed; the plan itself is now fully executed, not just scoped.
-Still not started: live game-feed mode, `PostgresWarehouse`, model #2
-(arsenal re-classification), model #6 (swing decision, needs #5's P(strike)
-as RV(take) — now unblocked) and model #15 (ABS counterfactual, also now
-unblocked), viz 7-8, 10-12, 14, 15-19, Retrosheet backfill.
+**Model #2 (arsenal re-classification) is also done** — see "Arsenal
+re-classification" above and the assistant's project memory
+(`baseball-model2-arsenal-plan`) for the four-bug design history; model +
+mart only, no API/UI/viz #12 yet, same staged pattern model #5 used.
+Still not started: live game-feed mode, `PostgresWarehouse`, model #6
+(swing decision, needs #5's P(strike) as RV(take) — now unblocked) and
+model #15 (ABS counterfactual, also now unblocked), viz #12 (UMAP arsenal
+map — mart now exists to build it from), viz 7-8, 10-11, 14, 15-19,
+Retrosheet backfill.
 
 ---
 
