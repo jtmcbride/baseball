@@ -166,6 +166,61 @@ export interface UmpireZoneRow {
   full_name?: string;
 }
 
+/** A row of `mart_pitcher_arsenal_clusters`: one re-derived cluster within a
+ * pitcher-season, graded against Savant's own `pitch_type` labels. */
+export interface ArsenalClusterRow {
+  mlbam_id: number;
+  season: number;
+  cluster_id: number;
+  label: string;
+  n: number;
+  usage_pct: number;
+  velo_avg: number;
+  ivb_in: number;
+  hb_arm_in: number;
+  release_extension_avg: number;
+  spin_axis_arm_deg: number;
+  savant_majority: string;
+  purity: number;
+  n_savant_labels: number;
+  cluster_k: number;
+  savant_pitch_types: number;
+  arsenal_size_diff: number;
+  season_purity: number;
+}
+
+/** A row of `mart_arsenal_embedding`: one pitcher-season's point on the UMAP
+ * arsenal map (viz #12, M3 model #11). */
+export interface ArsenalEmbeddingRow {
+  mlbam_id: number;
+  season: number;
+  x: number;
+  y: number;
+  archetype_id: number;
+  archetype_label: string;
+  cluster_k: number;
+  savant_pitch_types: number;
+  arsenal_size_diff: number;
+  season_purity: number;
+  n_pitches: number;
+  primary_label: string;
+  primary_velo: number;
+  reducer: string;
+}
+
+/** A row of `mart_arsenal_neighbors`, joined to `dim_player`/the embedding
+ * mart for a name and archetype -- "who does this pitcher resemble?" */
+export interface SimilarPitcherRow {
+  rank: number;
+  distance: number;
+  neighbor_id: number;
+  neighbor_season: number;
+  full_name: string | null;
+  archetype_label: string | null;
+  primary_label: string | null;
+  primary_velo: number | null;
+}
+
 export interface ZoneExtent {
   grid_n: number;
   x_min: number; x_max: number;
@@ -317,6 +372,12 @@ export const api = {
     json<FramingRow[]>("/framing/catchers", params),
   umpireLeaders: (params: Record<string, unknown>) =>
     json<UmpireZoneRow[]>("/framing/umpires", params),
+  arsenalClusters: (id: number, season?: number) =>
+    json<ArsenalClusterRow[]>(`/arsenal/${id}`, { season }),
+  arsenalEmbedding: (params: Record<string, unknown> = {}) =>
+    json<ArsenalEmbeddingRow[]>("/arsenal/embedding", params),
+  similarPitchers: (id: number, season?: number, limit = 10) =>
+    json<SimilarPitcherRow[]>(`/arsenal/${id}/similar`, { season, limit }),
   zoneExtent: () => json<ZoneExtent>("/zones/extent"),
   zones: (id: number, role: string, metric: string, season?: number) =>
     json<ZoneGrid>(`/zones/${id}`, { role, metric, season }),

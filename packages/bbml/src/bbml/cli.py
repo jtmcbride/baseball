@@ -453,6 +453,84 @@ def arsenal_clusters(
     console.print(table)
 
 
+@app.command("arsenal-embed")
+def arsenal_embed(
+    encoding: Annotated[str, typer.Option(help="slot or histogram — see arsenal_embed.py.")] = "slot",
+    reducer: Annotated[str, typer.Option(help="tsne, umap, or pca.")] = "tsne",
+    neighbors: Annotated[int, typer.Option(help="Nearest neighbors stored per pitcher-season.")] = 10,
+) -> None:
+    """Embed every pitcher-season from `mart_pitcher_arsenal_clusters` into 2D
+    and cluster it into archetypes (M3 model #11, backs viz #12: "who does
+    this pitcher resemble?"). Rebuilds `mart_arsenal_embedding` and
+    `mart_arsenal_neighbors`. Run `bb-ml arsenal` first if the cluster mart
+    is missing.
+    """
+    import polars as pl
+
+    from bbml.marts import build_arsenal_embedding_marts
+    from bbml.models.arsenal_embed import NAMED_SPOT_CHECKS
+
+    embedding, nbrs, validation = build_arsenal_embedding_marts(
+        encoding=encoding, reducer=reducer, n_neighbors=neighbors
+    )
+    console.print(f"[green]mart_arsenal_embedding: {embedding.height} rows[/green]")
+    console.print(f"[green]mart_arsenal_neighbors: {nbrs.height} rows[/green]")
+
+    table = Table(title=f"arsenal embedding validation ({encoding} / {reducer})")
+    table.add_column("metric")
+    table.add_column("value", justify="right")
+    for key in ("trustworthiness", "yoy_neighbor_rank", "n_pitcher_seasons", "k", "silhouette"):
+        table.add_row(key, f"{validation[key]:.4f}" if isinstance(validation[key], float) else str(validation[key]))
+    console.print(table)
+
+    arch = Table(title="archetypes")
+    for col in ("archetype_id", "label", "n"):
+        arch.add_column(col, justify="right" if col != "label" else "left")
+    counts = embedding.group_by("archetype_id").agg(pl.col("archetype_label").first(), pl.len())
+    for row in counts.sort("archetype_id").iter_rows(named=True):
+        arch.add_row(str(row["archetype_id"]), row["archetype_label"], str(row["len"]))
+    console.print(arch)
+
+    console.print("[dim]Named spot-checks (nearest neighbors by feature-space distance):[/dim]")
+    for pid, desc in NAMED_SPOT_CHECKS.items():
+        neighbors_for = nbrs.filter(pl.col("mlbam_id") == pid).sort(
+            ["season", "rank"], descending=[True, False]
+        )
+        console.print(f"  {pid} — {desc}")
+        for row in neighbors_for.head(5).iter_rows(named=True):
+            console.print(
+                f"    #{row['rank']}: {row['neighbor_id']} ({row['neighbor_season']}) d={row['distance']:.3f}"
+            )
+
+
+@app.command("arsenal-bakeoff")
+def arsenal_bakeoff() -> None:
+    """Re-run the encoding x reducer bake-off from `arsenal_embed.py`'s
+    docstring against the current lake and print the table. Slow (fits
+    t-SNE/UMAP six times); for reproducing the measured numbers, not routine
+    use."""
+    import polars as pl
+
+    from bbcore.config import get_settings
+    from bbml.marts import MART_ARSENAL_CLUSTERS
+    from bbml.models.arsenal_embed import bake_off
+
+    s = get_settings()
+    cluster_path = s.lake_dir / MART_ARSENAL_CLUSTERS
+    if not any(cluster_path.glob("*.parquet")):
+        console.print(f"[red]{MART_ARSENAL_CLUSTERS} not found. Run `bb-ml arsenal` first.[/red]")
+        raise typer.Exit(1)
+    df = pl.read_parquet(cluster_path / "*.parquet")
+    result = bake_off(df)
+
+    table = Table(title="arsenal embedding bake-off")
+    for col in result.columns:
+        table.add_column(col, justify="right" if col not in ("encoding", "reducer") else "left")
+    for row in result.iter_rows():
+        table.add_row(*(f"{v:.4f}" if isinstance(v, float) else str(v) for v in row))
+    console.print(table)
+
+
 @app.command("status")
 def status() -> None:
     """Show which model versions are registered."""

@@ -194,5 +194,38 @@ export const ZONE_METRICS: Record<string, MetricDef> = {
   },
 };
 
+// Arsenal embedding map (viz #12): colour-by options for the UMAP scatter.
+// Same diverging ramp as ZONE_METRICS -- see that registry's comment for why
+// a diverging ramp with a documented mid/halfRange, not a per-chart hue.
+// mid/halfRange set from mart_arsenal_embedding's real p1/p99 (measured
+// 2026-08-17): arsenal_size_diff -2/+4, season_purity 0.70/1.0, cluster_k
+// 2/9, primary_velo 78.3/99.1mph.
+export const ARSENAL_METRICS: Record<string, MetricDef> = {
+  arsenal_size_diff: {
+    key: "arsenal_size_diff", label: "vs. Savant", mid: 0, halfRange: 4,
+    format: (v) => (v >= 0 ? "+" : "") + v.toFixed(0),
+    higherIsBatterGood: false,
+    legendLabels: ["Savant over-splits", "Savant under-splits"],
+  },
+  season_purity: {
+    key: "season_purity", label: "Cluster purity", mid: 0.85, halfRange: 0.15,
+    format: (v) => `${(v * 100).toFixed(0)}%`,
+    higherIsBatterGood: false,
+    legendLabels: ["more blended", "more pure"],
+  },
+  cluster_k: {
+    key: "cluster_k", label: "Re-derived pitch count", mid: 4.7, halfRange: 3.5,
+    format: (v) => v.toFixed(0),
+    higherIsBatterGood: false,
+    legendLabels: ["fewer pitches", "more pitches"],
+  },
+  primary_velo: {
+    key: "primary_velo", label: "Primary pitch velo", mid: 92, halfRange: 9,
+    format: (v) => `${v.toFixed(1)}`,
+    higherIsBatterGood: false,
+    legendLabels: ["softer", "harder"],
+  },
+};
+
 export const number = (v: number | null | undefined, digits = 1): string =>
   v == null || !Number.isFinite(v) ? "—" : v.toFixed(digits);

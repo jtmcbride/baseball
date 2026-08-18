@@ -13,6 +13,8 @@ against his fastball as an equal.
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 import polars as pl
 
@@ -492,6 +494,40 @@ def build_arsenal_cluster_mart(
         return out
     _write(out, MART_ARSENAL_CLUSTERS, s)
     return out
+
+
+def build_arsenal_embedding_marts(
+    *,
+    encoding: str = "slot",
+    reducer: str = "tsne",
+    n_neighbors: int = 10,
+    settings: Settings | None = None,
+) -> tuple[pl.DataFrame, pl.DataFrame, dict]:
+    """`mart_arsenal_embedding` + `mart_arsenal_neighbors` (M3 model #11,
+    backing viz #12). Reads `mart_pitcher_arsenal_clusters` back off the lake
+    rather than rebuilding it — model #2 is the input here, not something this
+    rebuilds every time. Run `bb-ml arsenal` first if that mart is missing.
+
+    Returns the two mart frames plus the validation dict (`trustworthiness`,
+    `yoy_neighbor_rank`, archetype silhouette, named spot-checks) so the CLI
+    can print it — neither number is written to either mart.
+    """
+    from bbml.models.arsenal_embed import Encoding, Reducer, build_embedding
+
+    s = settings or get_settings()
+    cluster_path = s.lake_dir / MART_ARSENAL_CLUSTERS
+    if not any(cluster_path.glob("*.parquet")):
+        raise FileNotFoundError(
+            f"{MART_ARSENAL_CLUSTERS} not found. Run `bb-ml arsenal` first."
+        )
+    df = pl.read_parquet(cluster_path / "*.parquet")
+
+    embedding_df, neighbors_df, validation = build_embedding(
+        df, encoding=cast(Encoding, encoding), reducer=cast(Reducer, reducer), n_neighbors=n_neighbors
+    )
+    _write(embedding_df, MART_ARSENAL_EMBEDDING, s)
+    _write(neighbors_df, MART_ARSENAL_NEIGHBORS, s)
+    return embedding_df, neighbors_df, validation
 
 
 def _write(df: pl.DataFrame, name: str, settings: Settings) -> None:

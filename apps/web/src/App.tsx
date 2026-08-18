@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { FilterBar } from "./components/FilterBar";
 import { PlayerSearch } from "./components/PlayerSearch";
+import { ArsenalMapPage } from "./pages/ArsenalMapPage";
 import { PlayerPage } from "./pages/PlayerPage";
 import { UmpiresPage } from "./pages/UmpiresPage";
 import "./lib/theme.css";
@@ -17,7 +18,7 @@ const queryClient = new QueryClient({
   },
 });
 
-type View = "players" | "umpires";
+type View = "players" | "umpires" | "arsenals";
 
 export default function App() {
   const [view, setView] = useState<View>("players");
@@ -41,6 +42,9 @@ export default function App() {
             <ViewTab active={view === "umpires"} onClick={() => setView("umpires")}>
               Umpires
             </ViewTab>
+            <ViewTab active={view === "arsenals"} onClick={() => setView("arsenals")}>
+              Arsenal map
+            </ViewTab>
           </nav>
           {view === "players" && <PlayerSearch />}
         </header>
@@ -49,7 +53,7 @@ export default function App() {
           <FilterBar />
         </div>
 
-        {view === "players" ? <PlayerPage /> : <UmpiresPage />}
+        {view === "players" ? <PlayerPage /> : view === "umpires" ? <UmpiresPage /> : <ArsenalMapPage />}
       </div>
     </QueryClientProvider>
   );

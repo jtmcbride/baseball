@@ -19,6 +19,9 @@ dependencies = [
 # Kept out of the default install: heavy, and only needed once M2 model
 # comparison starts.
 tracking = ["mlflow>=2.19"]
+# Only needed to reproduce the reducer bake-off in models/arsenal_embed.py —
+# see that module's docstring for whether UMAP won.
+embedding = ["umap-learn>=0.5.7"]
 
 [project.scripts]
 bb-ml = "bbml.cli:app"

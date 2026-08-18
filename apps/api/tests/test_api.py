@@ -507,3 +507,83 @@ class TestFraming:
             pytest.skip("not enough qualified umpires to check ordering")
         magnitudes = [abs(r["edge"]) for r in rows]
         assert magnitudes == sorted(magnitudes, reverse=True)
+
+
+@pytest.fixture(scope="module")
+def embedded_pitcher(client: TestClient, health: dict) -> int:
+    _needs(health, "mart_arsenal_embedding")
+    rows = client.get("/arsenal/embedding", params={"min_pitches": 1}).json()
+    if not rows:
+        pytest.skip("no embedded pitcher-seasons")
+    return rows[0]["mlbam_id"]
+
+
+class TestArsenal:
+    """Model #2's re-derived arsenals (clusters) and model #11's 2D embedding
+    plus nearest-neighbor similarity (viz #12)."""
+
+    def test_pitcher_clusters_usage_sums_to_100(self, client, health):
+        _needs(health, "mart_pitcher_arsenal_clusters")
+        rows = client.get("/players", params={"limit": 1, "min_pitches": 1}).json()
+        if not rows:
+            pytest.skip("no pitchers")
+        # Not every pitcher qualifies for the cluster mart (min_pitches floor,
+        # 2020+ only) -- walk the embedding mart instead, which only lists
+        # pitchers that do.
+        embedded = client.get("/arsenal/embedding", params={"min_pitches": 1}).json()
+        if not embedded:
+            pytest.skip("no embedded pitcher-seasons")
+        pid, season = embedded[0]["mlbam_id"], embedded[0]["season"]
+        clusters = client.get(f"/arsenal/{pid}", params={"season": season}).json()
+        assert clusters
+        total = sum(r["usage_pct"] for r in clusters)
+        assert math.isclose(total, 100.0, abs_tol=0.5)
+
+    def test_unknown_pitcher_is_404_not_an_empty_list(self, client, health):
+        _needs(health, "mart_pitcher_arsenal_clusters")
+        assert client.get("/arsenal/1").status_code == 404
+
+    def test_embedding_route_is_matched_before_the_int_path_param(self, client, health):
+        """Regression: `/arsenal/embedding` must resolve to the literal route,
+        not attempt to parse "embedding" as `mlbam_id` and 422."""
+        _needs(health, "mart_arsenal_embedding")
+        r = client.get("/arsenal/embedding")
+        assert r.status_code == 200
+
+    def test_embedding_rows_have_finite_coordinates(self, client, health):
+        _needs(health, "mart_arsenal_embedding")
+        rows = client.get("/arsenal/embedding", params={"min_pitches": 1}).json()
+        if not rows:
+            pytest.skip("no embedded pitcher-seasons")
+        for row in rows[:200]:
+            assert math.isfinite(row["x"])
+            assert math.isfinite(row["y"])
+
+    def test_embedding_has_one_row_per_pitcher_season(self, client, health):
+        _needs(health, "mart_arsenal_embedding")
+        rows = client.get("/arsenal/embedding", params={"min_pitches": 1}).json()
+        keys = [(r["mlbam_id"], r["season"]) for r in rows]
+        assert len(keys) == len(set(keys))
+
+    def test_similar_pitchers_respects_limit(self, client, health, embedded_pitcher):
+        _needs(health, "mart_arsenal_neighbors")
+        rows = client.get(f"/arsenal/{embedded_pitcher}/similar", params={"limit": 3}).json()
+        assert 0 < len(rows) <= 3
+
+    def test_similar_pitchers_never_returns_the_query_pitcher_season_itself(
+        self, client, health, embedded_pitcher
+    ):
+        # A DIFFERENT season of the same pitcher is a legitimate neighbor (a
+        # submariner's closest match is often his own other seasons) -- only
+        # the exact queried (pitcher, season) pair must never appear.
+        _needs(health, "mart_arsenal_neighbors")
+        rows = client.get(f"/arsenal/{embedded_pitcher}/similar", params={"limit": 10}).json()
+        seasons = client.get(f"/arsenal/{embedded_pitcher}").json()
+        queried_season = max(r["season"] for r in seasons)
+        assert not any(
+            r["neighbor_id"] == embedded_pitcher and r["neighbor_season"] == queried_season for r in rows
+        )
+
+    def test_unknown_pitcher_similar_is_404(self, client, health):
+        _needs(health, "mart_arsenal_neighbors")
+        assert client.get("/arsenal/1/similar").status_code == 404
