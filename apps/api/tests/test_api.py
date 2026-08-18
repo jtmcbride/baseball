@@ -443,6 +443,25 @@ class TestSwing:
         r = client.get("/swing", params={"metric": "pitches; DROP TABLE dim_player"})
         assert r.status_code == 400
 
+    def test_per_swing_pitches_round_trip_as_arrow(self, client, health, graded_batter):
+        """The per-swing route (viz #19) — Arrow IPC, same predicate as the mart."""
+        _needs(health, "fact_pitch")
+        r = client.get(f"/swing/{graded_batter}/pitches")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == ARROW_MEDIA_TYPE
+        table = ipc.open_stream(io.BytesIO(r.content)).read_all()
+        assert table.num_rows == int(r.headers["X-Row-Count"])
+        for col in ("attack_angle", "vaa_deg", "swing_length", "is_whiff", "pitch_type"):
+            assert col in table.column_names
+
+    def test_per_swing_pitches_respects_season_filter(self, client, health, graded_batter):
+        _needs(health, "fact_pitch")
+        rows = client.get(f"/swing/{graded_batter}").json()
+        season = rows[0]["season"]
+        r = client.get(f"/swing/{graded_batter}/pitches", params={"season": season})
+        table = ipc.open_stream(io.BytesIO(r.content)).read_all()
+        assert table.num_rows > 0
+
 
 @pytest.fixture(scope="module")
 def graded_catcher(client: TestClient, health: dict) -> int:
