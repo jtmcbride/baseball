@@ -254,6 +254,42 @@ class TestZones:
         pytest.skip("no zone grids built for the sampled players")
 
 
+class TestSpray:
+    """Spray chart (viz #8): per-batted-ball rows plus the smoothed contour."""
+
+    def test_extent_is_self_describing(self, client):
+        ext = client.get("/spray/extent").json()
+        assert ext["grid_n"] > 0
+        assert ext["x_min"] < ext["x_max"]
+        assert ext["y_min"] < ext["y_max"]
+        assert "min_reliable_n" in ext
+
+    def test_batted_balls_round_trip_as_arrow(self, client, health, graded_batter):
+        _needs(health, "fact_pitch")
+        r = client.get(f"/spray/{graded_batter}/battedballs")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == ARROW_MEDIA_TYPE
+        table = ipc.open_stream(io.BytesIO(r.content)).read_all()
+        assert table.num_rows == int(r.headers["X-Row-Count"])
+        for col in ("x_ft", "y_ft", "estimated_woba_using_speedangle", "home_team"):
+            assert col in table.column_names
+
+    def test_unknown_batter_contour_is_404(self, client, health):
+        _needs(health, "mart_batter_spray")
+        assert client.get("/spray/1/contour").status_code == 404
+
+    def test_contour_ships_surface_and_reliability_together(self, client, health, graded_batter):
+        _needs(health, "mart_batter_spray")
+        got = client.get(f"/spray/{graded_batter}/contour")
+        if got.status_code != 200:
+            pytest.skip("this graded batter has no qualifying spray-mart season")
+        body = got.json()
+        n = body["grid_n"]
+        assert len(body["surface"]) == n * n
+        assert len(body["reliability"]) == n * n
+        assert body["layout"] == "row_major_x_then_y"
+
+
 def _model_available() -> bool:
     from bbcore.config import get_settings
     from bbml.registry import latest_dir
