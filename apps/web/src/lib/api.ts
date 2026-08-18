@@ -166,6 +166,43 @@ export interface ZoneGrid {
   layout: string;
 }
 
+export interface SprayExtent {
+  grid_n: number;
+  x_min: number; x_max: number;
+  y_min: number; y_max: number;
+  min_reliable_n: number;
+}
+
+/**
+ * `mart_batter_spray` (viz #8): smoothed xwOBA-on-contact surface over
+ * absolute field position, one grid per batter-season. Shaped like `ZoneGrid`
+ * on purpose — `layout` differs (`row_major_x_then_y`, not `_z`) since this
+ * grid's second axis is feet-from-plate, not the zone's normalized height.
+ */
+export interface SpraySurface {
+  mlbam_id: number;
+  season: number;
+  n_batted_balls: number;
+  grid_n: number;
+  surface: (number | null)[];
+  reliability: number[];
+  extent: SprayExtent;
+  layout: string;
+}
+
+/** One batted ball (viz #8), `GET /spray/{id}/battedballs` — Arrow IPC, no
+ * mart behind it, a direct `fact_pitch` read filtered to `is_in_play`. */
+export interface BattedBallRow {
+  x_ft: number;
+  y_ft: number;
+  launch_speed: number | null;
+  launch_angle: number | null;
+  bb_type: string | null;
+  estimated_woba_using_speedangle: number | null;
+  events: string | null;
+  home_team: string;
+}
+
 export interface LeagueShape {
   pitch_type: string;
   n: number;
@@ -262,6 +299,10 @@ export const api = {
   zoneExtent: () => json<ZoneExtent>("/zones/extent"),
   zones: (id: number, role: string, metric: string, season?: number) =>
     json<ZoneGrid>(`/zones/${id}`, { role, metric, season }),
+  sprayExtent: () => json<SprayExtent>("/spray/extent"),
+  sprayBattedBalls: (id: number, season?: number) => arrow(`/spray/${id}/battedballs`, { season }),
+  sprayContour: (id: number, season?: number) =>
+    json<SpraySurface>(`/spray/${id}/contour`, { season }),
   leagueShapes: (season?: number, hand = "R") =>
     json<LeagueShape[]>("/pitches/league-shapes", { season, hand }),
   pitches: (params: Record<string, unknown>) => arrow("/pitches", params),

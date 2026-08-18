@@ -6,10 +6,11 @@ import { MovementPlot, type MovementPoint } from "../components/MovementPlot";
 import { ReleasePlot, type ReleasePoint } from "../components/ReleasePlot";
 import { ReplayStrip } from "../components/ReplayStrip";
 import { StrikeZoneHeatmap } from "../components/StrikeZoneHeatmap";
+import { SprayChart } from "../components/SprayChart";
 import { StuffPanel } from "../components/StuffPanel";
 import { SwingPanel } from "../components/SwingPanel";
 import { VeloTrend, type VeloPoint } from "../components/VeloTrend";
-import { api, columns } from "../lib/api";
+import { api, columns, type BattedBallRow } from "../lib/api";
 import { useFilters } from "../store/filters";
 
 export function PlayerPage() {
@@ -50,6 +51,27 @@ export function PlayerPage() {
     enabled: !!playerId && role === "batter",
     retry: false,
   });
+
+  const sprayBattedBalls = useQuery({
+    queryKey: ["spray-battedballs", playerId, season],
+    queryFn: () => api.sprayBattedBalls(playerId!, season ?? undefined),
+    enabled: !!playerId && role === "batter",
+  });
+
+  const sprayContour = useQuery({
+    queryKey: ["spray-contour", playerId, season],
+    queryFn: () => api.sprayContour(playerId!, season ?? undefined),
+    enabled: !!playerId && role === "batter",
+    retry: false,
+  });
+
+  const battedBallRows = useMemo(() => {
+    if (!sprayBattedBalls.data) return [];
+    return columns<BattedBallRow>(sprayBattedBalls.data, [
+      "x_ft", "y_ft", "launch_speed", "launch_angle", "bb_type",
+      "estimated_woba_using_speedangle", "events", "home_team",
+    ]);
+  }, [sprayBattedBalls.data]);
 
   const isCatcher = profile.data?.player?.primary_position === "C";
   const framing = useQuery({
@@ -223,6 +245,29 @@ export function PlayerPage() {
             <SwingPanel row={swingRow} />
           ) : (
             <Skeleton h={110} />
+          )}
+        </section>
+      )}
+
+      {role === "batter" && (
+        <section className="card">
+          <h3>Spray chart</h3>
+          <p className="subtitle">
+            Every tracked batted ball over a real park outline, with this batter's smoothed
+            xwOBA-on-contact surface by field position.
+          </p>
+          {battedBallRows.length ? (
+            <SprayChart
+              battedBalls={battedBallRows}
+              contour={sprayContour.isError ? undefined : sprayContour.data}
+              defaultTeam={battedBallRows[0]?.home_team}
+            />
+          ) : sprayBattedBalls.isLoading ? (
+            <Skeleton h={400} />
+          ) : (
+            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              No tracked batted balls for this player.
+            </p>
           )}
         </section>
       )}

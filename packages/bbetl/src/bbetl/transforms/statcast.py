@@ -19,6 +19,15 @@ hot/cold maps mean anything across players.
 Savant does not ship these; they have to be reconstructed from the 9-parameter
 physics fit, and they are what makes the swing-path work possible at all — a
 swing plane is only good or bad relative to the plane of the pitch it meets.
+
+`x_ft` / `y_ft` — batted-ball landing spot in feet from home plate (standard
+orientation: home plate at the origin, straight-away CF along +y), converted
+from Savant's raw Gameday pixel coordinates `hc_x`/`hc_y`. The origin matches
+the community-published constant; the scale is this project's own fit against
+real `hit_distance_sc` data — see the constants below for the measurement.
+Unlike `hb_arm_in`, this is
+NOT mirrored by batter handedness: a spray chart shows absolute field position,
+not swing-relative direction.
 """
 
 from __future__ import annotations
@@ -158,6 +167,45 @@ def _approach_angle_exprs() -> list[pl.Expr]:
     ]
 
 
+# --- batted-ball hit coordinates ---------------------------------------------
+#
+# Gameday-pixel-to-feet conversion. The widely-published community constants
+# (home plate at pixel (125.42, 198.27), 2.495 px/ft) got the ORIGIN right but
+# not the scale, measured against this project's own real data: a
+# least-squares fit of `k * hypot(hc_x-x0, hc_y-y0)` against Savant's own
+# `hit_distance_sc` over 158,098 real 2023-2024 balls in play (>100ft, to
+# exclude the noisiest short-hop grounders) converged to x0=125.91, y0=199.54 —
+# a few tenths of a foot from the published origin, i.e. confirms it — but
+# k=2.339, not 2.495 (fixing the published origin and fitting k alone gives
+# 2.307, so the discrepancy is in the scale, not a mislocated origin).
+#
+# Even at the best-fit scale, MAE against `hit_distance_sc` is ~28ft with
+# r=0.886 — because `hc_x`/`hc_y` is a charted fielding location, not a
+# trajectory endpoint, this is the inherent precision of the public Gameday
+# coordinate, not a bug in this transform. Validated for what this feature
+# needs: no systematic offset (the fitted origin lands within a foot of the
+# published one) and no mirrored sign (pull-side means confirmed opposite for
+# LHB vs. RHB — see `TestHitCoordinates` in `test_transforms.py`, and
+# `HISTORY.md` for the full measurement). Good for spray direction and rough
+# field position; do not use `x_ft`/`y_ft` where the precise landing spot
+# matters more than the general area — `hit_distance_sc` is the batted ball's
+# actual measured distance and should be preferred whenever precision matters.
+HC_X0 = 125.91
+HC_Y0 = 199.54
+HC_PIXELS_PER_FOOT = 2.339
+
+
+def _hit_coordinate_exprs() -> list[pl.Expr]:
+    x_ft = (pl.col("hc_x") - HC_X0) * HC_PIXELS_PER_FOOT
+    y_ft = (HC_Y0 - pl.col("hc_y")) * HC_PIXELS_PER_FOOT
+    return [
+        x_ft.alias("x_ft"),
+        y_ft.alias("y_ft"),
+        pl.arctan2(x_ft, y_ft).degrees().alias("spray_angle_deg"),
+        (x_ft**2 + y_ft**2).sqrt().alias("hit_distance_derived_ft"),
+    ]
+
+
 def _base_state_expr() -> pl.Expr:
     """3-bit occupancy code, 0-7. Runner columns hold the runner's id or null."""
     return (
@@ -194,6 +242,8 @@ def enrich(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col("api_break_z_with_gravity") * 12).alias("vb_gravity_in"),
         # --- approach angles at the plate ---
         *_approach_angle_exprs(),
+        # --- batted-ball landing spot, feet from home plate ---
+        *_hit_coordinate_exprs(),
         # --- location, normalized to this batter's zone ---
         (
             (pl.col("plate_z") - pl.col("sz_bot"))

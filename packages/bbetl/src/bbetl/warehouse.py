@@ -33,6 +33,7 @@ LAKE_TABLES: dict[str, str] = {
     "mart_catcher_framing": "mart_catcher_framing/*.parquet",
     "mart_umpire_zone": "mart_umpire_zone/*.parquet",
     "mart_pitcher_arsenal_clusters": "mart_pitcher_arsenal_clusters/*.parquet",
+    "mart_batter_spray": "mart_batter_spray/*.parquet",
 }
 
 

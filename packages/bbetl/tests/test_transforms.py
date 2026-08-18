@@ -42,6 +42,8 @@ def _pitch(**overrides) -> dict:
         "on_1b": None,
         "on_2b": None,
         "on_3b": None,
+        "hc_x": None,
+        "hc_y": None,
     }
     base.update(overrides)
     return base
@@ -229,6 +231,44 @@ class TestGameState:
 
 def test_enrich_is_a_noop_on_empty_input():
     assert enrich(pl.DataFrame()).height == 0
+
+
+class TestHitCoordinates:
+    """hc_x/hc_y -> feet-from-home-plate, viz #8's spray chart. Constants are
+    measured, not the published defaults -- see `statcast.py`'s own comment
+    for the fit against real `hit_distance_sc` data (origin confirmed within a
+    foot of the community-published one; scale corrected from 2.495 to
+    2.339)."""
+
+    def test_ball_hit_straight_up_the_middle_lands_on_the_x_axis(self):
+        # hc_x == HC_X0 (home plate's own x) means dead centre: x_ft == 0.
+        df = frame(_pitch(hc_x=125.91, hc_y=38.0))
+        assert df["x_ft"][0] == pytest.approx(0.0, abs=1e-6)
+        assert df["spray_angle_deg"][0] == pytest.approx(0.0, abs=1e-6)
+
+    def test_derived_distance_matches_a_known_deep_center_field_shot(self):
+        # A ~378ft blast dead centre: y_ft = (199.54-38.0)*2.339 = 377.87ft.
+        df = frame(_pitch(hc_x=125.91, hc_y=38.0))
+        assert df["hit_distance_derived_ft"][0] == pytest.approx(377.87, abs=0.5)
+
+    def test_third_base_side_is_negative_x_first_base_side_is_positive(self):
+        # Gameday's pixel x grows rightward (toward 1B from the plate's view);
+        # hc_x < home plate's own x is therefore the 3B/LF side.
+        pulled_left = frame(_pitch(hc_x=90.0, hc_y=120.0))
+        pulled_right = frame(_pitch(hc_x=160.0, hc_y=120.0))
+        assert pulled_left["x_ft"][0] < 0
+        assert pulled_right["x_ft"][0] > 0
+
+    def test_spray_angle_sign_follows_x_ft(self):
+        left = frame(_pitch(hc_x=90.0, hc_y=120.0))
+        right = frame(_pitch(hc_x=160.0, hc_y=120.0))
+        assert left["spray_angle_deg"][0] < 0
+        assert right["spray_angle_deg"][0] > 0
+
+    def test_null_hit_coordinates_yield_null_derived_columns(self):
+        df = frame(_pitch(hc_x=None, hc_y=None))
+        assert df["x_ft"][0] is None
+        assert df["hit_distance_derived_ft"][0] is None
 
 
 class TestApproachAngles:

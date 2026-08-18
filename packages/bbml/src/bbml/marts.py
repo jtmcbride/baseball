@@ -396,7 +396,67 @@ def _write_zone_grid(df: pl.DataFrame, filename: str, settings: Settings) -> Non
     _register_table(MART_ZONE_PROFILE, settings)
 
 
+MART_BATTER_SPRAY = "mart_batter_spray"
+
+# A batted-ball landing spot is a much noisier per-event signal than a graded
+# pitch, so this floor is higher than the scalar marts' MIN_CATCHER_PITCHES —
+# a batter needs a real season's worth of contact before a field-position
+# surface means anything.
+MIN_BATTED_BALLS = 100
+
+
+def build_batter_spray_mart(
+    *,
+    seasons: list[int] | None = None,
+    min_batted_balls: int = MIN_BATTED_BALLS,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """`mart_batter_spray` (viz #8): one smoothed xwOBA-on-contact surface per
+    batter x season, over absolute field position (`x_ft`/`y_ft`). Same shape
+    as `_build_entity_grids` above, but the grid math lives in
+    `bbetl.transforms.spray` (its own bandwidth/extent, not the strike-zone
+    grid's) rather than `bbetl.transforms.zones`.
+    """
+    from bbetl.transforms import spray
+
+    s = settings or get_settings()
+    frame = spray.load_batted_ball_frame(seasons=seasons, settings=s)
+    if frame.height == 0:
+        log.warning("no batted balls to grid")
+        return pl.DataFrame()
+
+    counts = frame.group_by(["batter", "season"]).len().filter(pl.col("len") >= min_batted_balls)
+    qualified = set(zip(counts["batter"].to_list(), counts["season"].to_list(), strict=True))
+
+    rows: list[dict] = []
+    for (bid, season), group in frame.group_by(["batter", "season"], maintain_order=True):
+        if (bid, season) not in qualified:
+            continue
+        built = spray.build_grid(group)
+        if built is None:
+            continue
+        surface, eff_n, n = built
+        rows.append(
+            {
+                "mlbam_id": int(bid),
+                "season": int(season),
+                "n_batted_balls": n,
+                "grid_n": spray.GRID_N,
+                "surface": np.nan_to_num(surface, nan=np.nan).ravel().tolist(),
+                "reliability": eff_n.ravel().tolist(),
+            }
+        )
+    out = pl.DataFrame(rows)
+    if out.height == 0:
+        return out
+    out = out.sort(["season", "mlbam_id"])
+    _write(out, MART_BATTER_SPRAY, s)
+    return out
+
+
 MART_ARSENAL_CLUSTERS = "mart_pitcher_arsenal_clusters"
+MART_ARSENAL_EMBEDDING = "mart_arsenal_embedding"
+MART_ARSENAL_NEIGHBORS = "mart_arsenal_neighbors"
 
 
 def build_arsenal_cluster_mart(

@@ -306,6 +306,22 @@ def build_swing_mart(
     console.print(f"[green]mart_batter_swing: {mart.height} rows[/green]")
 
 
+@app.command("spray-mart")
+def build_spray_mart(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+    min_batted_balls: Annotated[int, typer.Option(help="Batter-season qualifier.")] = 100,
+) -> None:
+    """Rebuild `mart_batter_spray` (viz #8): smoothed xwOBA-on-contact surface
+    over field position, batter x season. No model to score first — it reads
+    `x_ft`/`y_ft` (`bbetl.transforms.statcast.enrich`) straight off `fact_pitch`."""
+    from bbml.marts import build_batter_spray_mart
+
+    mart = build_batter_spray_mart(
+        seasons=list(season) if season else None, min_batted_balls=min_batted_balls
+    )
+    console.print(f"[green]mart_batter_spray: {mart.height} rows[/green]")
+
+
 @app.command("called-strike")
 def train_called_strike(
     season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,

@@ -30,10 +30,10 @@ from typing import Literal
 
 import numpy as np
 import polars as pl
-from scipy.ndimage import gaussian_filter
 
 from bbcore.config import Settings, get_settings
 from bbcore.logging import get_logger
+from bbetl.transforms.smoothing import kernel_regress_2d
 
 log = get_logger(__name__)
 
@@ -64,13 +64,6 @@ Z_EDGES = np.linspace(Z_MIN, Z_MAX, GRID_N + 1)
 _SIGMA_X = BANDWIDTH_X_FT / ((X_MAX - X_MIN) / GRID_N)
 _SIGMA_Z = BANDWIDTH_Z_NORM / ((Z_MAX - Z_MIN) / GRID_N)
 
-# gaussian_filter returns smoothed density PER CELL, which is not what a reader
-# means by "how much data backs this cell". Multiplying by the kernel's effective
-# area converts it to an effective sample size: roughly the number of pitches
-# within one bandwidth of the cell. That is the number worth thresholding on and
-# the number worth showing in a tooltip.
-_KERNEL_AREA = 2.0 * np.pi * _SIGMA_X * _SIGMA_Z
-
 
 @dataclass(frozen=True)
 class MetricSpec:
@@ -98,26 +91,9 @@ METRICS: list[MetricSpec] = [
 
 
 def _smooth_ratio(x: np.ndarray, z: np.ndarray, w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Kernel-regress `w` onto the grid. Returns (surface, effective_n).
-
-    `effective_n` is an effective sample size in pitches, not a per-cell density
-    (see _KERNEL_AREA), so it can be thresholded and shown directly.
-
-    Both numerator and denominator get the identical kernel, so their ratio is a
-    proper weighted local mean rather than a smoothed-then-divided approximation.
-    """
-    num, _, _ = np.histogram2d(x, z, bins=[X_EDGES, Z_EDGES], weights=w)
-    den, _, _ = np.histogram2d(x, z, bins=[X_EDGES, Z_EDGES])
-
-    sigma = (_SIGMA_X, _SIGMA_Z)
-    # 'nearest' rather than the default zero-padding: zero-padding pulls the edge
-    # cells toward zero and fabricates a cold rim around every chart.
-    num_s = gaussian_filter(num, sigma=sigma, mode="nearest")
-    den_s = gaussian_filter(den, sigma=sigma, mode="nearest")
-
-    with np.errstate(invalid="ignore", divide="ignore"):
-        surface = np.where(den_s > 1e-9, num_s / den_s, np.nan)
-    return surface, den_s * _KERNEL_AREA
+    """Kernel-regress `w` onto this module's grid. See `kernel_regress_2d` for
+    the shared numeric core (also used by `spray.py`)."""
+    return kernel_regress_2d(x, z, w, X_EDGES, Z_EDGES, _SIGMA_X, _SIGMA_Z)
 
 
 def build_grid(df: pl.DataFrame, spec: MetricSpec) -> tuple[np.ndarray, np.ndarray, int] | None:

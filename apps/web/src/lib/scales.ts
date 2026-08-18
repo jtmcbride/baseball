@@ -173,6 +173,16 @@ export const ZONE_METRICS: Record<string, MetricDef> = {
     higherIsBatterGood: false,
     legendLabels: ["fewer strikes called", "more strikes called"],
   },
+  // Spray chart (viz #8): smoothed xwOBA-on-contact over field position, not
+  // per-pitch location. mid/halfRange measured from mart_batter_spray's own
+  // RELIABLE cells only (reliability >= min_reliable_n) -- the full grid
+  // (including sparse near-empty deep-field cells averaging one HR) runs all
+  // the way to ~2.0 and would blow out this ramp; p1/p99 on reliable cells
+  // (measured 2026-08-17): 0.10 / 0.44.
+  spray: {
+    key: "spray", label: "xwOBA on contact", mid: 0.27, halfRange: 0.17,
+    format: (v) => v.toFixed(3).replace(/^0/, ""), higherIsBatterGood: true,
+  },
   // Umpire zone map (viz #13): the umpire's own actual called-strike rate by
   // location — no model score involved. The client draws its 50% contour as
   // the umpire's effective zone boundary against the rulebook rectangle.
