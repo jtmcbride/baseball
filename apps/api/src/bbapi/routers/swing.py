@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
-from bbapi.deps import latest_season, require_table, warehouse
+from bbapi.arrow import arrow_response, season_ttl
+from bbapi.deps import latest_season, require_table, settings, warehouse
+from bbml.features.swing import load_swing_frame
 
 router = APIRouter(prefix="/swing", tags=["swing"])
 
@@ -72,3 +74,34 @@ def leaderboard(
         )
         .to_pylist()
     )
+
+
+# Per-swing grain columns the scatter/histogram need. Mirrors `PITCH_COLUMNS`
+# in `routers/pitches.py`'s reasoning — select only what the chart draws.
+SWING_PITCH_COLUMNS = [
+    "attack_angle",
+    "vaa_deg",
+    "swing_length",
+    "bat_speed",
+    "swing_path_tilt",
+    "pitch_type",
+    "is_whiff",
+    "is_in_play",
+    "estimated_woba_using_speedangle",
+    "game_date",
+]
+
+
+@router.get("/{mlbam_id}/pitches")
+def batter_swing_pitches(mlbam_id: int, season: int | None = None) -> Response:
+    """Every tracked swing for this batter, one row per swing.
+
+    Calls the same `load_swing_frame()` the batter-season mart is built from
+    (`bbml.marts.build_batter_swing_mart`) so this route and the mart can never
+    drift apart on which swings qualify — tracked, competitive, regular-season,
+    2023H2+ (`FIRST_SWING_TRACKING_SEASON`), non-null attack angle and VAA.
+    """
+    require_table("fact_pitch")
+    df = load_swing_frame(seasons=[season] if season else None)
+    df = df.filter(df["batter"] == mlbam_id).select(SWING_PITCH_COLUMNS)
+    return arrow_response(df.to_arrow(), cache_seconds=season_ttl(season, settings().current_season))

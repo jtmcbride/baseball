@@ -9,8 +9,9 @@ import { StrikeZoneHeatmap } from "../components/StrikeZoneHeatmap";
 import { SprayChart } from "../components/SprayChart";
 import { StuffPanel } from "../components/StuffPanel";
 import { SwingPanel } from "../components/SwingPanel";
+import { SwingPathScatter } from "../components/SwingPathScatter";
 import { VeloTrend, type VeloPoint } from "../components/VeloTrend";
-import { api, columns, type BattedBallRow } from "../lib/api";
+import { api, columns, type BattedBallRow, type SwingPitchRow } from "../lib/api";
 import { useFilters } from "../store/filters";
 
 export function PlayerPage() {
@@ -51,6 +52,20 @@ export function PlayerPage() {
     enabled: !!playerId && role === "batter",
     retry: false,
   });
+
+  const swingPitches = useQuery({
+    queryKey: ["swing-pitches", playerId, season],
+    queryFn: () => api.swingPitches(playerId!, season ?? undefined),
+    enabled: !!playerId && role === "batter",
+  });
+
+  const swingPitchRows = useMemo(() => {
+    if (!swingPitches.data) return [];
+    return columns<SwingPitchRow>(swingPitches.data, [
+      "attack_angle", "vaa_deg", "swing_length", "bat_speed", "swing_path_tilt",
+      "pitch_type", "is_whiff", "is_in_play", "estimated_woba_using_speedangle", "game_date",
+    ]);
+  }, [swingPitches.data]);
 
   const sprayBattedBalls = useQuery({
     queryKey: ["spray-battedballs", playerId, season],
@@ -245,6 +260,25 @@ export function PlayerPage() {
             <SwingPanel row={swingRow} />
           ) : (
             <Skeleton h={110} />
+          )}
+        </section>
+      )}
+
+      {role === "batter" && (
+        <section className="card">
+          <h3>Swing path</h3>
+          <p className="subtitle">
+            Attack angle vs. pitch descent angle, every tracked swing (2023H2+ — bat-tracking
+            coverage before then is too thin to trust).
+          </p>
+          {swingPitchRows.length ? (
+            <SwingPathScatter pitches={swingPitchRows} />
+          ) : swingPitches.isLoading ? (
+            <Skeleton h={400} />
+          ) : (
+            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              No tracked swings — this player has no 2023H2+ swings with bat tracking.
+            </p>
           )}
         </section>
       )}

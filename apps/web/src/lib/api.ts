@@ -120,6 +120,26 @@ export interface SwingRow {
   full_name?: string;
 }
 
+/**
+ * One tracked swing (viz #19) — no mart behind this, a direct `fact_pitch`
+ * read via `load_swing_frame()` (`GET /swing/{id}/pitches`), same predicate
+ * `mart_batter_swing` is built from. `vaa_deg` is the pitch's descent angle at
+ * the plate, not the batter's own quantity — it's the x-axis of the
+ * attack-angle-vs-descent-angle scatter.
+ */
+export interface SwingPitchRow {
+  attack_angle: number;
+  vaa_deg: number;
+  swing_length: number;
+  bat_speed: number;
+  swing_path_tilt: number;
+  pitch_type: string | null;
+  is_whiff: boolean;
+  is_in_play: boolean;
+  estimated_woba_using_speedangle: number | null;
+  game_date: string;
+}
+
 /** A row of `mart_catcher_framing`: one catcher-season's framing runs. */
 export interface FramingRow {
   mlbam_id: number;
@@ -290,6 +310,7 @@ export const api = {
   stuffLeaders: (params: Record<string, unknown>) => json<StuffRow[]>("/stuff", params),
   swing: (id: number, season?: number) => json<SwingRow[]>(`/swing/${id}`, { season }),
   swingLeaders: (params: Record<string, unknown>) => json<SwingRow[]>("/swing", params),
+  swingPitches: (id: number, season?: number) => arrow(`/swing/${id}/pitches`, { season }),
   catcherFraming: (id: number, season?: number) =>
     json<FramingRow[]>(`/framing/catchers/${id}`, { season }),
   catcherFramingLeaders: (params: Record<string, unknown>) =>
