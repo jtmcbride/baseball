@@ -77,6 +77,30 @@ export function pitchShape(pitchType: string | null | undefined): MarkerShape {
   return (pitchType && SHAPE_BY_PITCH[pitchType]) || "circle";
 }
 
+/**
+ * Dash pattern for a 3D trajectory line, in feet — the 3D analogue of
+ * `markerPath`.
+ *
+ * The overlay views draw several pitches at once, and three family hues cannot
+ * separate a slider from a curveball. In 2D that is `pitchShape`'s job; a
+ * polyline has no marker to shape, so the same four-way split becomes four line
+ * patterns, keyed off the identical shape table so a pitch reads the same across
+ * the movement plot and the 3D scene. Solid (`null`) is the fastball case, which
+ * is both the most common and the one that should look cleanest.
+ */
+export function pitchDash(pitchType: string | null | undefined): [number, number] | null {
+  switch (pitchShape(pitchType)) {
+    case "square":
+      return [0.9, 0.5];
+    case "triangle":
+      return [0.25, 0.4];
+    case "diamond":
+      return [1.4, 0.4];
+    default:
+      return null;
+  }
+}
+
 /** SVG path for a marker of the given shape, centred on the origin. */
 export function markerPath(shape: MarkerShape, r: number): string {
   switch (shape) {

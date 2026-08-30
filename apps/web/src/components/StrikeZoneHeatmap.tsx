@@ -11,7 +11,31 @@
 import { useMemo, useState } from "react";
 import type { ZoneGrid } from "../lib/api";
 import { marchingSquares } from "../lib/contour";
-import { DIVERGING_LEGEND_STOPS, ZONE_METRICS, divergingColor } from "../lib/scales";
+import {
+  DIVERGING_LEGEND_STOPS, ZONE_METRICS, divergingColor, familyColor, familyOf,
+} from "../lib/scales";
+
+/**
+ * A single pitch drawn on top of the surface.
+ *
+ * The heatmap is a season; a mark is one pitch. Overlaying them is what makes
+ * the at-bat view answer "did he go where this hitter is weak?" instead of
+ * leaving the reader to hold a grid in their head while looking at a 3D scene.
+ * Coordinates are the grid's own: `x` in feet from the plate's centre, `z`
+ * normalized to this batter's zone (0 = knees, 1 = letters), which is what
+ * makes a 5'6" and a 6'7" hitter comparable in the first place.
+ */
+export interface ZoneMark {
+  key: string;
+  x: number;
+  z: number;
+  label?: string;
+  pitchType?: string | null;
+  /** Rings the mark and draws it full size — the currently selected pitch. */
+  emphasis?: boolean;
+  title?: string;
+  onClick?: () => void;
+}
 
 interface Props {
   grid: ZoneGrid;
@@ -24,13 +48,19 @@ interface Props {
    * a shape that's hard to read off color alone.
    */
   contourAt?: number;
+  /** Individual pitches drawn over the surface, in sequence order. */
+  marks?: ZoneMark[];
+  /** Join the marks with a thin line — the shape of a pitch sequence. */
+  connectMarks?: boolean;
 }
 
 // Rulebook zone in the grid's own coordinates: the plate is 17" wide (plus a
 // ball's radius each side), and z is normalized so 0..1 IS the batter's zone.
 const PLATE_HALF_FT = 0.83;
 
-export function StrikeZoneHeatmap({ grid, width = 320, height = 380, contourAt }: Props) {
+export function StrikeZoneHeatmap({
+  grid, width = 320, height = 380, contourAt, marks, connectMarks = false,
+}: Props) {
   const [hover, setHover] = useState<{ i: number; j: number } | null>(null);
   const metric = ZONE_METRICS[grid.metric] ?? ZONE_METRICS.whiff;
   const { grid_n: n, x_min, x_max, z_min, z_max, min_reliable_n } = grid.extent;
@@ -133,6 +163,58 @@ export function StrikeZoneHeatmap({ grid, width = 320, height = 380, contourAt }
               strokeWidth={2.5}
               strokeLinecap="round"
             />
+          ))}
+
+          {connectMarks && marks && marks.length > 1 && (
+            <polyline
+              points={marks.map((m) => `${xScale(m.x)},${yScale(m.z)}`).join(" ")}
+              fill="none"
+              stroke="var(--text-primary)"
+              strokeWidth={1}
+              strokeDasharray="3 3"
+              opacity={0.45}
+            />
+          )}
+
+          {marks?.map((m) => (
+            <g
+              key={m.key}
+              onClick={m.onClick}
+              style={{ cursor: m.onClick ? "pointer" : "default" }}
+            >
+              <title>{m.title ?? m.label ?? ""}</title>
+              <circle
+                cx={xScale(m.x)}
+                cy={yScale(m.z)}
+                r={m.emphasis ? 9 : 7}
+                fill={familyColor(familyOf(m.pitchType))}
+                stroke="var(--surface-1)"
+                strokeWidth={m.emphasis ? 2 : 1}
+                opacity={m.emphasis ? 1 : 0.8}
+              />
+              {m.emphasis && (
+                <circle
+                  cx={xScale(m.x)}
+                  cy={yScale(m.z)}
+                  r={13}
+                  fill="none"
+                  stroke="var(--text-primary)"
+                  strokeWidth={1.5}
+                />
+              )}
+              {m.label && (
+                <text
+                  x={xScale(m.x)}
+                  y={yScale(m.z) + 3.5}
+                  textAnchor="middle"
+                  fontSize={9}
+                  fill="var(--surface-1)"
+                  style={{ pointerEvents: "none", fontWeight: 700 }}
+                >
+                  {m.label}
+                </text>
+              )}
+            </g>
           ))}
 
           {hovered && (

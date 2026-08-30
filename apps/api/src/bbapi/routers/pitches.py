@@ -210,3 +210,106 @@ def league_pitch_shapes(season: int | None = None, hand: str = Query("R", patter
         )
         .to_pylist()
     )
+
+
+# The physics columns plus the identity/shape columns a comparison view needs to
+# label a line and let the reader jump back to the real pitch it came from.
+EXEMPLAR_COLUMNS = [
+    "game_pk",
+    "game_date",
+    "at_bat_number",
+    "pitch_number",
+    *TRAJECTORY_COLUMNS,
+    "ivb_in",
+    "hb_arm_in",
+    "release_spin_rate",
+]
+
+
+@router.get("/arsenal-trajectories")
+def arsenal_trajectories(
+    pitcher_id: int,
+    season: int | None = None,
+    vs_hand: str | None = Query(None, pattern="^[LR]$"),
+    min_pitches: int = Query(15, ge=1, le=5_000),
+) -> list[dict[str, Any]]:
+    """One representative flight per pitch type — the arsenal, overlaid.
+
+    A pitch-comparison view has to answer "what does this pitcher's slider look
+    like next to his fastball", and there is no such thing as an average
+    *trajectory*: averaging the nine physics parameters across a season produces
+    a path no pitch ever took, and the average of two release points is a
+    release point in between them that the pitcher never used. So this returns
+    a real thrown pitch — the one nearest its own type's centroid in
+    standardized (velo, IVB, arm-side HB) space, which is the closest thing to
+    "his typical slider" that is also a pitch that actually happened.
+
+    Types below `min_pitches` are dropped: the exemplar of a 3-pitch sample is
+    as likely to be a mislabel as a pitch, and it would draw at the same weight
+    as the fastball.
+    """
+    require_table("fact_pitch")
+    cols = ", ".join(f"src.{c}" for c in EXEMPLAR_COLUMNS)
+    sql = f"""
+        WITH src AS (
+            SELECT {", ".join(EXEMPLAR_COLUMNS)}
+            FROM fact_pitch
+            WHERE pitcher = $id AND is_tracked_pitch AND is_competitive
+              AND pitch_type IS NOT NULL AND vx0 IS NOT NULL
+              AND release_speed IS NOT NULL AND ivb_in IS NOT NULL
+              AND hb_arm_in IS NOT NULL
+              AND ($season IS NULL OR season = $season)
+              AND ($vs_hand IS NULL OR stand = $vs_hand)
+        ),
+        shape AS (
+            SELECT pitch_type,
+                   count(*)                       AS n,
+                   avg(release_speed)             AS velo_avg,
+                   avg(ivb_in)                    AS ivb_avg,
+                   avg(hb_arm_in)                 AS hb_avg,
+                   -- A single-valued sample has zero (or null) spread; the
+                   -- coalesce keeps its z-score finite rather than dividing by
+                   -- zero and ranking every candidate NaN.
+                   coalesce(nullif(stddev_samp(release_speed), 0), 1) AS velo_sd,
+                   coalesce(nullif(stddev_samp(ivb_in), 0), 1)        AS ivb_sd,
+                   coalesce(nullif(stddev_samp(hb_arm_in), 0), 1)     AS hb_sd
+            FROM src GROUP BY pitch_type
+        ),
+        ranked AS (
+            SELECT {cols}, shape.n, shape.velo_avg, shape.ivb_avg, shape.hb_avg,
+                   row_number() OVER (
+                       PARTITION BY src.pitch_type ORDER BY
+                           pow((src.release_speed - shape.velo_avg) / shape.velo_sd, 2)
+                         + pow((src.ivb_in       - shape.ivb_avg)  / shape.ivb_sd,  2)
+                         + pow((src.hb_arm_in    - shape.hb_avg)   / shape.hb_sd,   2)
+                   ) AS rn
+            FROM src JOIN shape USING (pitch_type)
+            WHERE shape.n >= $min_pitches
+        )
+        SELECT * EXCLUDE (rn, velo_avg, ivb_avg, hb_avg),
+               round(velo_avg, 1) AS velo_avg,
+               round(ivb_avg, 1)  AS ivb_avg,
+               round(hb_avg, 1)   AS hb_avg,
+               -- Share of every competitive tracked pitch in the window, not of
+               -- the kept types only: a type dropped by `min_pitches` must not
+               -- inflate the usage of the ones that survived.
+               round(100.0 * n / (SELECT count(*) FROM src), 1) AS usage_pct
+        FROM ranked WHERE rn = 1
+        ORDER BY n DESC
+    """
+    rows = (
+        warehouse()
+        .execute(
+            sql,
+            {"id": pitcher_id, "season": season, "vs_hand": vs_hand, "min_pitches": min_pitches},
+        )
+        .to_pylist()
+    )
+    if not rows:
+        raise HTTPException(
+            404,
+            f"No tracked pitch types for pitcher {pitcher_id}"
+            + (f" in {season}" if season else "")
+            + f" with at least {min_pitches} pitches.",
+        )
+    return rows

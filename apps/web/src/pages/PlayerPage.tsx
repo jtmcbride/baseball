@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { ArsenalTable } from "../components/ArsenalTable";
+import { AtBat3D } from "../components/AtBat3D";
 import { FramingPanel } from "../components/FramingPanel";
 import { MovementPlot, type MovementPoint } from "../components/MovementPlot";
+import { PitchComparison3D } from "../components/PitchComparison3D";
 import { ReleasePlot, type ReleasePoint } from "../components/ReleasePlot";
 import { ReplayStrip } from "../components/ReplayStrip";
 import { StrikeZoneHeatmap } from "../components/StrikeZoneHeatmap";
@@ -12,6 +14,7 @@ import { SwingPanel } from "../components/SwingPanel";
 import { SwingPathScatter } from "../components/SwingPathScatter";
 import { VeloTrend, type VeloPoint } from "../components/VeloTrend";
 import { api, columns, type BattedBallRow, type SwingPitchRow } from "../lib/api";
+import { ZONE_METRICS } from "../lib/scales";
 import { useFilters } from "../store/filters";
 
 export function PlayerPage() {
@@ -321,6 +324,33 @@ export function PlayerPage() {
           )}
         </section>
       )}
+
+      {role === "pitcher" && (
+        <section className="card">
+          <h3>Pitch comparison</h3>
+          <p className="subtitle">
+            One real pitch per type, flown together. Hue is the pitch family and the line
+            pattern is the pitch, the same encoding as the movement plot. Add a second pitcher
+            to put two arsenals in the same frame — his pitches carry the diamond marker.
+          </p>
+          <PitchComparison3D
+            pitcherId={playerId}
+            pitcherName={player?.full_name ?? "This pitcher"}
+            season={season}
+            vsHand={vsHand}
+          />
+        </section>
+      )}
+
+      <section className="card">
+        <h3>At-bat in 3D</h3>
+        <p className="subtitle">
+          Every pitch of one plate appearance in a single scene, over the hitter's own
+          {" "}{(ZONE_METRICS[metric] ?? ZONE_METRICS.whiff).label.toLowerCase()} map. Click a
+          pitch — in the strip or on the zone — to single it out.
+        </p>
+        <AtBat3D playerId={playerId} role={role} season={season} metric={metric} />
+      </section>
 
       {role === "pitcher" && (
         <section className="card">

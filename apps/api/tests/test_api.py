@@ -217,6 +217,123 @@ class TestTrajectory:
             pytest.skip("no tracked pitches in sample")
 
 
+class TestArsenalTrajectories:
+    """The arsenal overlay's data source (pitch comparison viz).
+
+    The contract these guard is that every row is a REAL pitch, identified by
+    its natural key, and that the physics on it reconstructs to the plate the
+    same way `/pitches/trajectory` does — an averaged or synthesized row would
+    still deserialize fine and would be a path nobody threw.
+    """
+
+    def test_requires_a_pitcher(self, client):
+        assert client.get("/pitches/arsenal-trajectories").status_code == 422
+
+    def test_unknown_pitcher_is_404(self, client, health):
+        _needs(health, "fact_pitch")
+        assert (
+            client.get("/pitches/arsenal-trajectories", params={"pitcher_id": 1}).status_code == 404
+        )
+
+    def test_one_row_per_pitch_type_with_physics(self, client, health, a_pitcher):
+        _needs(health, "fact_pitch")
+        r = client.get("/pitches/arsenal-trajectories", params={"pitcher_id": a_pitcher})
+        if r.status_code == 404:
+            pytest.skip("sampled pitcher has no type above the min-pitches floor")
+        rows = r.json()
+        assert rows
+        types = [row["pitch_type"] for row in rows]
+        assert len(types) == len(set(types)), "a pitch type appeared twice"
+        for row in rows:
+            for key in ("vx0", "vy0", "vz0", "ax", "ay", "az", "release_pos_y"):
+                assert row[key] is not None
+            assert row["n"] >= 15
+            assert 0 < row["usage_pct"] <= 100
+
+    def test_exemplar_is_a_real_pitch_that_exists(self, client, health, a_pitcher):
+        """The natural key must resolve — this is what makes the overlay
+        traceable back to a pitch someone actually threw."""
+        _needs(health, "fact_pitch")
+        r = client.get("/pitches/arsenal-trajectories", params={"pitcher_id": a_pitcher})
+        if r.status_code == 404:
+            pytest.skip("sampled pitcher has no type above the min-pitches floor")
+        row = r.json()[0]
+        got = client.get(
+            "/pitches/trajectory",
+            params={
+                "game_pk": row["game_pk"],
+                "at_bat_number": row["at_bat_number"],
+                "pitch_number": row["pitch_number"],
+            },
+        )
+        assert got.status_code == 200
+        assert got.json()["vx0"] == row["vx0"]
+
+    def test_flight_lands_on_the_pitch_own_plate_crossing(self, client, health, a_pitcher):
+        """Same check as TestTrajectory, applied to the exemplars: the overlay
+        draws these paths, so they have to be the paths Savant measured."""
+        _needs(health, "fact_pitch")
+        r = client.get("/pitches/arsenal-trajectories", params={"pitcher_id": a_pitcher})
+        if r.status_code == 404:
+            pytest.skip("sampled pitcher has no type above the min-pitches floor")
+        for b in r.json():
+            t_r = _solve_t(50.0, b["vy0"], b["ay"], b["release_pos_y"])
+            vx_r = b["vx0"] + b["ax"] * t_r
+            vy_r = b["vy0"] + b["ay"] * t_r
+            vz_r = b["vz0"] + b["az"] * t_r
+            tau = _solve_t(b["release_pos_y"], vy_r, b["ay"], 17 / 12)
+            px = b["release_pos_x"] + vx_r * tau + 0.5 * b["ax"] * tau * tau
+            pz = b["release_pos_z"] + vz_r * tau + 0.5 * b["az"] * tau * tau
+            assert abs(px - b["plate_x"]) < 0.05
+            assert abs(pz - b["plate_z"]) < 0.05
+
+
+class TestAtBats:
+    """Whole-at-bat routes behind the 3D at-bat view."""
+
+    def test_listing_requires_a_filter(self, client, health):
+        _needs(health, "fact_pitch")
+        assert client.get("/atbats").status_code == 400
+
+    def test_unknown_at_bat_is_404(self, client, health):
+        _needs(health, "fact_pitch")
+        assert client.get("/atbats/1/1").status_code == 404
+
+    def test_listing_summarizes_plate_appearances(self, client, health, a_pitcher):
+        _needs(health, "fact_pitch")
+        rows = client.get("/atbats", params={"pitcher_id": a_pitcher, "limit": 5}).json()
+        if not rows:
+            pytest.skip("sampled pitcher has no at-bats")
+        for r in rows:
+            assert r["pitches"] >= 1
+            assert r["tracked_pitches"] <= r["pitches"]
+
+    def test_detail_returns_the_sequence_in_order(self, client, health, a_pitcher):
+        """Pitch order is the whole point of an at-bat route, and untracked
+        pitches must stay in it — they move the count."""
+        _needs(health, "fact_pitch")
+        rows = client.get("/atbats", params={"pitcher_id": a_pitcher, "limit": 5}).json()
+        if not rows:
+            pytest.skip("sampled pitcher has no at-bats")
+        ab = rows[0]
+        body = client.get(f"/atbats/{ab['game_pk']}/{ab['at_bat_number']}").json()
+        numbers = [p["pitch_number"] for p in body["pitches"]]
+        assert numbers == sorted(numbers)
+        assert len(numbers) == ab["pitches"]
+        assert body["sz_bot"] < body["sz_top"]
+
+    def test_detail_count_state_never_exceeds_a_legal_count(self, client, health, a_pitcher):
+        _needs(health, "fact_pitch")
+        rows = client.get("/atbats", params={"pitcher_id": a_pitcher, "limit": 5}).json()
+        if not rows:
+            pytest.skip("sampled pitcher has no at-bats")
+        ab = rows[0]
+        body = client.get(f"/atbats/{ab['game_pk']}/{ab['at_bat_number']}").json()
+        for p in body["pitches"]:
+            assert 0 <= p["balls"] <= 4
+            assert 0 <= p["strikes"] <= 3
+
+
 class TestZones:
     def test_extent_is_self_describing(self, client):
         ext = client.get("/zones/extent").json()
@@ -581,7 +698,8 @@ class TestArsenal:
         seasons = client.get(f"/arsenal/{embedded_pitcher}").json()
         queried_season = max(r["season"] for r in seasons)
         assert not any(
-            r["neighbor_id"] == embedded_pitcher and r["neighbor_season"] == queried_season for r in rows
+            r["neighbor_id"] == embedded_pitcher and r["neighbor_season"] == queried_season
+            for r in rows
         )
 
     def test_unknown_pitcher_similar_is_404(self, client, health):

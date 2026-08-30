@@ -73,6 +73,15 @@ mostly noise at the corners. Every grid ships a reliability mask (effective
 sample size per cell) and the UI fades cells below the floor rather than
 presenting an interpolated estimate at full saturation.
 
+**A pitch comparison shows a real pitch, not an average one.** The arsenal
+overlay picks the thrown pitch nearest its own type's centroid rather than
+averaging the nine physics parameters, which would produce a flight path
+nobody threw from a release point the pitcher never used. Tunnel separation is
+then measured where the flights are the same DISTANCE from the plate, not at
+the same instant — at a shared clock time a 96mph fastball is feet closer to
+the plate than an 87mph slider, and the "gap" you measure is mostly the
+velocity difference.
+
 **Bat-tracking columns are 2024+** (`bat_speed`, `swing_length`) **and swing-path
 columns 2025+**. They are nullable across the whole 2015+ lake; `bb check
 --coverage` reports per-season availability so this is discovered from the data

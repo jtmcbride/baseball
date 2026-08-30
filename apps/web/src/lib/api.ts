@@ -335,6 +335,115 @@ export interface PitchTrajectory {
   sz_bot: number;
 }
 
+/**
+ * One representative flight per pitch type — `GET /pitches/arsenal-trajectories`.
+ *
+ * Extends `PitchTrajectory` with the identity of the real pitch it came from and
+ * the shape stats of the type it represents. It is a REAL thrown pitch, the one
+ * nearest its type's centroid: there is no such thing as an average trajectory,
+ * and averaging the nine physics parameters produces a path nobody threw. See
+ * the endpoint's docstring.
+ */
+export interface ArsenalTrajectory extends PitchTrajectory {
+  game_pk: number;
+  game_date: string;
+  at_bat_number: number;
+  pitch_number: number;
+  release_spin_rate: number | null;
+  ivb_in: number | null;
+  hb_arm_in: number | null;
+  /** Pitches of this type in the window, and the type's averages. */
+  n: number;
+  usage_pct: number;
+  velo_avg: number;
+  ivb_avg: number;
+  hb_avg: number;
+}
+
+/** One row of `GET /atbats` — enough to label a plate appearance in a picker. */
+export interface AtBatSummary {
+  game_pk: number;
+  at_bat_number: number;
+  game_date: string;
+  pitcher: number;
+  batter: number;
+  pitcher_name: string | null;
+  batter_name: string | null;
+  inning: number | null;
+  stand: string | null;
+  p_throws: string | null;
+  pitches: number;
+  tracked_pitches: number;
+  result: string | null;
+  result_description: string | null;
+  run_value: number | null;
+}
+
+/**
+ * One pitch of an at-bat. Physics is nullable on purpose: pitch-clock
+ * violations, ABS-awarded calls and pre-tracking seasons have no flight, and
+ * they still belong in the sequence because they move the count.
+ */
+export interface AtBatPitch {
+  pitch_number: number;
+  balls: number;
+  strikes: number;
+  outs_when_up: number | null;
+  pitch_type: string | null;
+  pitch_name: string | null;
+  p_throws: string;
+  stand: string;
+  release_speed: number | null;
+  release_extension: number | null;
+  release_spin_rate: number | null;
+  release_pos_x: number | null;
+  release_pos_y: number | null;
+  release_pos_z: number | null;
+  vx0: number | null;
+  vy0: number | null;
+  vz0: number | null;
+  ax: number | null;
+  ay: number | null;
+  az: number | null;
+  plate_x: number | null;
+  plate_z: number | null;
+  plate_z_norm: number | null;
+  sz_top: number | null;
+  sz_bot: number | null;
+  ivb_in: number | null;
+  hb_arm_in: number | null;
+  description: string | null;
+  events: string | null;
+  is_swing: boolean | null;
+  is_whiff: boolean | null;
+  is_called_strike: boolean | null;
+  is_in_play: boolean | null;
+  delta_run_exp: number | null;
+}
+
+/** `GET /atbats/{game_pk}/{at_bat_number}` — the header plus every pitch in order. */
+export interface AtBatDetail {
+  game_pk: number;
+  at_bat_number: number;
+  game_date: string;
+  season: number;
+  pitcher: number;
+  batter: number;
+  pitcher_name: string | null;
+  batter_name: string | null;
+  inning: number | null;
+  home_team: string | null;
+  p_throws: string;
+  stand: string;
+  /** Mean of the per-pitch zone estimates — one zone for the whole at-bat. */
+  sz_top: number;
+  sz_bot: number;
+  result: string | null;
+  result_description: string | null;
+  run_value: number | null;
+  pitches: AtBatPitch[];
+}
+
 export interface ReplayPitch {
   at_bat_number: number;
   pitch_number: number;
@@ -394,6 +503,15 @@ export const api = {
     json<GameSummary[]>(`/players/${id}/games`, { season, limit: 25 }),
   replay: (gamePk: number, pitcherId: number) =>
     json<ReplayPitch[]>(`/games/${gamePk}/replay`, { pitcher_id: pitcherId }),
+  arsenalTrajectories: (pitcherId: number, season?: number, vsHand?: string | null) =>
+    json<ArsenalTrajectory[]>("/pitches/arsenal-trajectories", {
+      pitcher_id: pitcherId,
+      season,
+      vs_hand: vsHand ?? undefined,
+    }),
+  atBats: (params: Record<string, unknown>) => json<AtBatSummary[]>("/atbats", params),
+  atBat: (gamePk: number, atBatNumber: number) =>
+    json<AtBatDetail>(`/atbats/${gamePk}/${atBatNumber}`),
   trajectory: (gamePk: number, atBatNumber: number, pitchNumber: number) =>
     json<PitchTrajectory>("/pitches/trajectory", {
       game_pk: gamePk,

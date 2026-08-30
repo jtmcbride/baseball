@@ -57,6 +57,18 @@ export interface Flight {
   positionAt(tau: number): Vec3;
   /** Speed in mph at time `tau` since release. */
   speedAt(tau: number): number;
+  /**
+   * Seconds since release at which the ball is `y` feet from the plate.
+   *
+   * The inverse of `positionAt`'s y component, and the thing any comparison
+   * BETWEEN pitches needs: two pitches at the same elapsed time are at
+   * different distances from the plate, so a gap measured at a shared clock
+   * time is mostly the velocity difference. A gap measured at a shared
+   * distance is the pitches actually diverging. Clamped to the tracked flight
+   * — a y behind the release point or past the plate has no position on this
+   * path, only an extrapolation of a fit that stops there.
+   */
+  tauAtY(y: number): number;
 }
 
 export function reconstructFlight(p: PhysicsParams): Flight {
@@ -73,6 +85,9 @@ export function reconstructFlight(p: PhysicsParams): Flight {
     p.release_pos_z + vzR * tau + 0.5 * p.az * tau * tau,
   ];
 
+  const tauAtY = (y: number): number =>
+    Math.max(0, Math.min(tauTotal, solveT(p.release_pos_y, vyR, p.ay, y)));
+
   const FT_S_TO_MPH = 3600 / 5280;
   const speedAt = (tau: number): number => {
     const vx = vxR + p.ax * tau;
@@ -81,5 +96,5 @@ export function reconstructFlight(p: PhysicsParams): Flight {
     return Math.sqrt(vx * vx + vy * vy + vz * vz) * FT_S_TO_MPH;
   };
 
-  return { tauTotal, positionAt, speedAt };
+  return { tauTotal, positionAt, speedAt, tauAtY };
 }
