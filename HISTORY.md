@@ -902,3 +902,96 @@ per-pitch-type usage priors. Per-pitcher models measured ~20% worse on the
 single-season run, and the multi-season run's baseline collapse only reinforces
 that conclusion. See `next_pitch.py` module docstring for the full writeup —
 don't re-derive it.
+
+---
+
+## Pitch comparison + 3D at-bat (2026-08-30)
+
+Three views built on one new scene component, plus a real bug found in the
+existing 3D pitch trajectory while building it.
+
+**The bug: every trajectory rendered grey.** `PitchTrajectory3D`'s `cssColor()`
+took a CSS custom-property NAME and passed it to `getPropertyValue`, but the
+call site handed it `familyColor(...)` — which returns the `var(--family-x)`
+*expression*, not the name. `getPropertyValue("var(--family-fastball)")`
+returns an empty string, which fell through to the `#888888` fallback. So the
+pitch trail and the release marker in viz #6 have been painting the same grey
+regardless of pitch family since that component shipped. It was invisible with
+one pitch on screen (grey reads as "the trail colour") and immediately obvious
+with four. `cssColor` now accepts either form. WebGL has no CSS, so this is
+the one place in the app where a design token has to be resolved by hand.
+
+**`PitchScene3D`** is the existing single-pitch scene generalized to N pitches;
+`PitchTrajectory3D` is now a thin wrapper over it, so there is one WebGL
+implementation rather than two that drift. The physics, coordinate mapping
+(including the parity-flip correction) and camera staging are unchanged. New:
+
+- Scene rebuilds key on the pitch IDs, not the array identity. These panels
+  rebuild their props every render, and tearing down a WebGL context each time
+  would reset the reader's camera orbit mid-drag. Speed, sync mode, commit
+  distance and highlight all mutate the live scene in place for the same
+  reason.
+- Encoding for multiple pitches: hue is the pitch FAMILY and the line dash is
+  the pitch type within it (`pitchDash`, keyed off the same `SHAPE_BY_PITCH`
+  table the 2D marks use). The validated palette clears the all-pairs CVD gate
+  with three hues; a fourth for "the other pitcher" would break it, so the
+  second SOURCE is encoded as marker GEOMETRY instead — sphere vs. octahedron,
+  legend glyphs to match.
+
+**Tunnel measurement (`lib/tunnel.ts`).** The comparison's numbers sample every
+flight at the same DISTANCE from the plate, not the same elapsed time. This is
+the one thing in the module that is easy to get wrong and was gotten wrong
+first: an initial version measured at a fixed lead time (167ms) before each
+pitch's own plate crossing, and its test failed immediately — the "gap at the
+commit point" came out *larger* than the gap at the plate (24.0″ vs 7.1″),
+because a 96mph fastball 167ms out is several feet closer to the plate than an
+87mph slider 167ms out, and that y-difference dominated the 3D distance. A
+shared distance removes velocity from the measurement and leaves the pitches
+diverging, which is what the question asks and what the published tunnelling
+convention uses. `Flight` gained `tauAtY()` to support it.
+
+`COMMIT_DISTANCE_FT = 23.8` is staging, not physics (≈167ms on a mid-90s
+fastball), which is why it is a slider in the UI with its own reaction-time
+readout rather than a constant buried in a caption.
+
+**`/pitches/arsenal-trajectories`** returns one REAL pitch per type — the one
+nearest its type's centroid in standardized (velo, IVB, arm-side HB) space —
+not an averaged one. Averaging the nine physics parameters produces a path
+nobody threw, and the average of two release points is a slot the pitcher never
+used. Consequence, stated in the panel rather than hidden: the exemplars come
+from different plate appearances, so the zone behind them belongs to no single
+hitter and is a reference rectangle (the mean of those pitches' own measured
+zones). Types under 15 pitches are dropped — the exemplar of a 3-pitch sample
+is as likely to be a mislabel as a pitch, and it would draw at fastball weight.
+
+**`/atbats` + `/atbats/{game_pk}/{at_bat_number}`** are the first routes keyed
+on a plate appearance rather than a player or a pitch. Untracked pitches
+(pitch-clock violations, ABS calls, pre-tracking seasons) come back with null
+physics rather than being filtered: they move the count, and dropping them
+would silently renumber the at-bat and make a 3-2 appear from nowhere. The
+at-bat outcome is `arg_max(events, pitch_number)`, which also skips the nulls
+every non-terminal pitch carries.
+
+**`AtBat3D`** pairs the scene with the BATTER's own zone grid, this at-bat's
+pitches drawn on top as numbered marks in sequence order (`StrikeZoneHeatmap`
+gained a `marks` prop). The surface is a season and the marks are six pitches
+from one afternoon; that mismatch is the point — the surface is the prior, the
+marks are the event — which is also why marks stay marks and are never folded
+into the surface.
+
+**Verification.** 60 frontend tests (was 48; +12 in `tunnel.test.ts`), 12 new
+API contract tests (`TestArsenalTrajectories`, `TestAtBats` — the exemplar
+tests re-run the plate-crossing reconstruction check against every returned
+row, since the overlay draws these paths), `tsc --noEmit`, `oxlint`, `ruff
+check`. The API tests skip without a built warehouse, as the rest of the suite
+does, and this session had no local data — the SQL was instead exercised
+directly against a synthetic `fact_pitch` in DuckDB through the real handlers.
+Visual verification was a Playwright pass (light + dark) driving the real UI
+with the API routes mocked, which is how the grey-trajectory bug above was
+found; the framing check needed fixture pitches solved to land on a real plate
+location, because made-up `vx0/ax` values fly the ball out of the park and make
+correct geometry look broken.
+
+**Not done:** no Playwright pass against real data (none in this environment),
+so pitch-type coverage on real arsenals (a 7-pitch arsenal overlaid) is
+unverified.
