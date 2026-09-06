@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from bbapi.deps import settings, warehouse
 from bbapi.routers import (
+    arsenal,
     atbats,
     framing,
     pitches,
@@ -20,6 +21,8 @@ from bbapi.routers import (
     zones,
 )
 from bbcore.logging import setup_logging
+from bbetl.marts import SQL_MARTS
+from bbetl.warehouse import LAKE_TABLES
 
 setup_logging()
 
@@ -36,6 +39,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Every table the pipeline can produce, derived from the two places that define
+# them rather than hand-listed here. A hand-maintained copy is how
+# `mart_arsenal_embedding` went missing from /health, which in turn made every
+# arsenal contract test `pytest.skip` instead of catching an unmounted router.
+KNOWN_TABLES: tuple[str, ...] = tuple(sorted({*LAKE_TABLES, *SQL_MARTS}))
+
+
 meta = APIRouter(tags=["meta"])
 
 
@@ -44,23 +54,7 @@ def health() -> dict[str, Any]:
     """Reports which pipeline stages have actually run — the first thing to check
     when the UI is empty."""
     wh = warehouse()
-    tables = {
-        name: wh.table_exists(name)
-        for name in (
-            "fact_pitch",
-            "dim_player",
-            "dim_game",
-            "dim_team",
-            "dim_player_ids",
-            "mart_pitcher_arsenal",
-            "mart_zone_profile",
-            "mart_pitcher_stuff",
-            "mart_batter_swing",
-            "mart_catcher_framing",
-            "mart_umpire_zone",
-            "mart_batter_spray",
-        )
-    }
+    tables = {name: wh.table_exists(name) for name in KNOWN_TABLES}
     pitch_count = wh.scalar("SELECT count(*) FROM fact_pitch") if tables["fact_pitch"] else 0
     return {"status": "ok", "tables": tables, "pitches": pitch_count}
 
@@ -90,6 +84,7 @@ app.include_router(swing.router)
 app.include_router(framing.router)
 app.include_router(spray.router)
 app.include_router(atbats.router)
+app.include_router(arsenal.router)
 
 
 def main() -> None:

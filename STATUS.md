@@ -1,17 +1,17 @@
 # Development bookmark
 
-**Paused:** 2026-08-17 · **M1 and M2 complete and visually verified
+**Paused:** 2026-09-06 · **M1 and M2 complete and visually verified
 end-to-end. M3 models #2, #3, #4, #5, and #11 are all done, each with a full
 API + UI surface, and every dedicated visualization those models unlocked
 (viz #20 catcher framing map, viz #13 umpire zone map, viz #12 UMAP arsenal
-map) is built too. Viz #19 (swing path) and viz #8 (spray chart) are also now
-built** — see "Viz #8/#19" below; #8's `x_ft`/`y_ft` hit-coordinate transform
-required rebuilding the full lake (row counts unchanged, 9,202,082 pitches)
-and has NOT yet had a Playwright visual pass (no browser tool available in
-that session — API-level smoke checks only). The full 2015-2026 backfill has
-landed (9,202,082 pitches, contiguous) and every model has been retrained on
-it. Officials data (umpire per game) is fully ingested (11,154 games) and
-materialized as `dim_official`.
+map) is built too. Viz #8 (spray chart) and #19 (swing path) are built AND
+now Playwright-verified against real data** (2026-09-06 — the check STATUS
+had been carrying as outstanding since 2026-08-17; it found three real bugs,
+see "Viz #8/#19 verification" below). **A regression on `main` that silenced
+the whole model #2/#11 API surface has been fixed** — see "Arsenal router"
+below. The full 2015-2026 backfill has landed (9,202,082 pitches, contiguous)
+and every model has been retrained on it. Officials data (umpire per game) is
+fully ingested (11,154 games) and materialized as `dim_official`.
 
 Read this first in a new session, then `README.md` for how the thing works,
 `HISTORY.md` for the full dated write-up of how each piece got built (bugs
@@ -29,13 +29,17 @@ architecture plan and the M3 backlog.
 | `packages/bbcore` | Config + `Warehouse` adapter (DuckDB). Postgres impl deliberately absent — M3. |
 | `packages/bbetl` | Savant / Stats API / Chadwick clients, transforms, marts, quality suite, `transforms/officials.py` (`dim_official`). Complete. |
 | `packages/bbml` | Feature builder (batch+live, parity-tested), datasets/splits, `UsageRateBaseline`, `NextPitchModel` (pitch type), `LocationModel` (26-class grid), `PersonalizedBlend`, arsenal re-classification (M3 model #2 — pairwise GMM merge/split tests against Savant's `pitch_type`), arsenal embedding + archetypes (M3 model #11, backs viz #12 — `models/arsenal_embed.py`), `RunValue` + `PitchQualityModel` (Stuff+/Location+/Pitching+, M3 model #3), `SwingPathModel` (whiff + contact heads, M3 model #4), `CalledStrikeModel` (binary, `framing_runs` + `umpire_zone_rate`, M3 model #5), `registry.py` (versioned artifacts + optional MLflow), `marts.py` (every mart below plus the catcher/umpire spatial grids feeding `mart_zone_profile`), `bb-ml` CLI. Depends on `bbetl`. |
-| `apps/api` | `/predict/next-pitch`, `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/*`, `/swing/*` (+ `/swing/{id}/pitches` per-swing Arrow, viz #19), `/framing/*`, `/zones/{id}` (roles: batter/pitcher/catcher/umpire), `/arsenal/{id}`, `/arsenal/embedding`, `/arsenal/{id}/similar`, `/spray/*` (`battedballs` Arrow, `contour` JSON, `extent` — viz #8), `/pitches/arsenal-trajectories` (one real exemplar flight per pitch type) and `/atbats` + `/atbats/{game_pk}/{at_bat_number}` (whole plate appearance, physics per pitch — pitch comparison + 3D at-bat). 31 routes total (`app.openapi()` path count — the previously recorded 31 was stale, the real pre-session count was 28), JSON + Arrow IPC. |
-| `apps/web` | Filter bar, player search, 4 charts, arsenal table + re-derived-arsenal panel, at-bat replay strip (viz #9), 3D pitch trajectory (viz #6), pitch quality panel (model #3), swing-plane panel for batters (model #4) plus a swing-path scatter + length histogram (viz #19), spray chart over a real park outline with a smoothed xwOBA contour (viz #8), catcher-framing panel with embedded zone map (viz #20), standalone Umpires tab (viz #13), standalone Arsenal map tab (viz #12 — pan/zoom scatter, archetype hulls, "who does this pitcher resemble?"), pitch comparison (multi-trajectory 3D: one pitcher's arsenal overlaid, or two pitchers side by side, with a commit-point tunnel readout) and a 3D at-bat panel (every pitch of one plate appearance over the batter's own zone heat map). Visually verified light + dark EXCEPT viz #8/#19 — see the paused-state note above. |
+| `apps/api` | `/predict/next-pitch`, `/games/{game_pk}/replay`, `/players/{id}/games`, `/pitches/trajectory`, `/stuff/*`, `/swing/*` (+ `/swing/{id}/pitches` per-swing Arrow, viz #19), `/framing/*`, `/zones/{id}` (roles: batter/pitcher/catcher/umpire), `/arsenal/{id}`, `/arsenal/embedding`, `/arsenal/{id}/similar`, `/spray/*` (`battedballs` Arrow, `contour` JSON, `extent` — viz #8), `/pitches/arsenal-trajectories` (one real exemplar flight per pitch type) and `/atbats` + `/atbats/{game_pk}/{at_bat_number}` (whole plate appearance, physics per pitch — pitch comparison + 3D at-bat). 34 routes total (`app.openapi()` path count; the previously recorded 31 was measured while the arsenal router was unmounted — see "Arsenal router"), JSON + Arrow IPC. |
+| `apps/web` | Filter bar, player search, 4 charts, arsenal table + re-derived-arsenal panel, at-bat replay strip (viz #9), 3D pitch trajectory (viz #6), pitch quality panel (model #3), swing-plane panel for batters (model #4) plus a swing-path scatter + length histogram (viz #19), spray chart over a real park outline with a smoothed xwOBA contour (viz #8), catcher-framing panel with embedded zone map (viz #20), standalone Umpires tab (viz #13), standalone Arsenal map tab (viz #12 — pan/zoom scatter, archetype hulls, "who does this pitcher resemble?"), pitch comparison (multi-trajectory 3D: one pitcher's arsenal overlaid, or two pitchers side by side, with a commit-point tunnel readout) and a 3D at-bat panel (every pitch of one plate appearance over the batter's own zone heat map). Visually verified light + dark, viz #8/#19 included as of 2026-09-06. |
 
-**Verification status:** 235+ backend Python tests (bbcore/bbetl/bbml/api;
-exact count not re-tallied this session — targeted suites for every file
-touched all pass, see "Viz #8/#19" below), 48 frontend tests (was 43;
-+`histogram.test.ts`), `tsc --noEmit`, `oxlint`, `ruff check`, `bb check`
+**Verification status:** 235+ backend Python tests (bbcore/bbetl/bbml/api).
+The full backend suite was NOT run to completion on 2026-09-06 — it was
+stopped at 27% (135 tests, no failures in that prefix); the targeted
+`TestMeta`/`TestArsenal*` selection passes apart from the deliberate ABS
+failure below. **Re-run `uv run pytest` before trusting the backend state.**
+48 frontend tests (was 43;
++`histogram.test.ts`; now 64, +4 in `viewport.test.ts` for `axisStretch`),
+`tsc --noEmit`, `oxlint`, `ruff check`, `bb check`
 (data quality — all error-level checks pass after the lake rebuild), a
 frontend production build (`npm run build`). `bb-ml status` unchanged by this
 session — `mart_batter_spray` is a direct-from-`fact_pitch` mart with no
@@ -47,10 +51,19 @@ counts after the rebuild), saved to
 — arsenal re-classification and arsenal embedding have no registered
 artifact (small per-pitcher-season / whole-mart fits, not `bbml.registry`
 artifacts) so they aren't a ninth/tenth entry here. UI visually verified with
-Playwright (light + dark) across every panel/tab EXCEPT viz #8/#19 (this
-session had no browser tool available) — see `HISTORY.md` for the specific
-pitchers/catchers/umpires checked on the older panels and what each check
-found.
+Playwright (light + dark) across every panel/tab — viz #8/#19 included as of
+2026-09-06 (Judge, Ohtani, Arraez, against the real API, not mocks) — see
+`HISTORY.md` for the specific pitchers/catchers/umpires checked on each panel
+and what each check found.
+
+**One backend test fails on `main`, deliberately left failing:**
+`TestArsenalTrajectories::test_flight_lands_on_the_pitch_own_plate_crossing`
+reconstructs an exemplar's flight to `17/12` ft and gets a 0.098 ft vertical
+residual when the sampled exemplar comes from an ABS game. This is the ABS
+plate-reference canary doing its job — it fires exactly when a 2026 (or 2025
+spring/All-Star) pitch is drawn — and it stays red until the plane question
+is decided. Do not "fix" it by widening the tolerance; that deletes the only
+automated detector for the shift. See "Open decisions" below.
 
 ---
 
@@ -100,14 +113,69 @@ modules now call it, regression-tested to reproduce `zones.py`'s pre-refactor
 output exactly), the new `mart_batter_spray` mart, a `/spray/*` router, and
 30 MLB park wall polygons (`apps/web/src/data/parks.ts`, Catmull-Rom-smoothed
 through 5 publicly documented distance markers per park — LF/LF-alley/CF/
-RF-alley/RF, not survey-grade fence data). **Not yet Playwright-verified** —
-that session had no browser tool available; do this before trusting the
-chart's visual correctness (park outline orientation, contour rendering,
-light/dark).
+RF-alley/RF, not survey-grade fence data).
+
+**Arsenal router (fixed 2026-09-06):** `apps/api/src/bbapi/main.py` never
+called `app.include_router(arsenal.router)`, so on every commit through
+`46b3837` the whole model #2/#11 surface 404'd — `/arsenal/embedding`,
+`/arsenal/{id}`, `/arsenal/{id}/similar`, and with them the Arsenal map tab
+(viz #12), the re-derived-arsenal panel and "who does this pitcher resemble?".
+The suite stayed green because `_needs()` in `test_api.py` skips off
+`health["tables"]`, and the same handler in the same file also omitted the
+three arsenal marts from its hand-written table list — so `.get()` returned
+None and every arsenal test, including the one written as a route-matching
+regression test, skipped silently. Three fixes, not one:
+`app.include_router(arsenal.router)`; `/health`'s table list now DERIVED from
+`LAKE_TABLES | SQL_MARTS` (`main.KNOWN_TABLES`) instead of hand-maintained;
+`_needs()` now RAISES on a table `/health` has never heard of and skips only
+on one it reports as unbuilt. Plus `TestMeta::test_every_router_module_is_mounted`,
+which walks `bbapi.routers` and asserts every route each module defines is in
+`app.openapi()["paths"]` — verified to fail with the include commented out.
+Two more latent holes closed on the way: `mart_arsenal_embedding` and
+`mart_arsenal_neighbors` were missing from `bbetl.warehouse.LAKE_TABLES` (they
+self-register at write time, so a plain `bb build register` would not have
+recovered them — the documented gotcha, live), and `apps/api` now declares its
+`bbetl` dependency explicitly rather than leaning on `bbml`'s.
+
+**Viz #8/#19 verification (2026-09-06):** the outstanding Playwright pass, run
+against the real local API with real data (Judge, Ohtani, Arraez; light +
+dark). Three real bugs, all of the kind unit tests structurally cannot see —
+the components rendered, the data was right, the pictures were wrong:
+- **Viz #19's x axis collapsed to 10% of the plot.** `SwingPathScatter` reused
+  `fitViewport`, whose single `scale` is deliberate — feet-by-feet on the
+  spray chart, where an anisotropic park is a wrong park — but wrong for a
+  scatter of two unrelated angles. Descent angle spans ~12.5 deg against
+  attack angle's ~91.4, so x got 49 of 480 pixels and every batter drew as the
+  same vertical ribbon; the fastball/breaking-ball separation the viz exists
+  to show was invisible. Fixed with `axisStretch()` in `lib/viewport.ts`,
+  which pre-stretches x into y's units before fitting, leaving the shared
+  pan/zoom math and the raw `vaa_deg` on the row for the readout. 4 tests.
+- **Viz #8 opened on an arbitrary park.** `defaultTeam` was
+  `battedBallRows[0]?.home_team` — row order, not the batter. A career query
+  for a Yankee opened on Citizens Bank Park. Now the modal `home_team`.
+- **Viz #8 had no foul lines and no home plate.** `parkPolygon` returns the
+  wall arc only, and `wallPath` does not close it, so the chart was a bare
+  dome floating over the points with nothing marking the origin everything is
+  measured from. Added dashed foul lines home-plate-to-each-pole plus a plate
+  marker.
+
+**What the pass confirmed correct** (worth not re-deriving): viz #8's
+coordinate transform and park geometry are right, measured rather than
+eyeballed. Against Judge's career 3,286 batted balls at Yankee Stadium, only
+**0.42% of non-home-runs (12 balls) plot beyond the wall**, which is the check
+that a scale or origin error would fail loudly; 5.17% fall outside the foul
+lines, which is foul-territory batted-ball events, as expected. 61.5% of home
+runs plot INSIDE the wall — that is the documented `hc_x`/`hc_y` caveat (a
+charted fielding location, ~28ft MAE, not a landing point), not a rendering
+bug. The `parkPolygon` spline reproduces its five measured markers exactly and
+is monotone in angle. The dark-mode diverging ramp inverts lightness
+(extremes light, midpoint dark) — that is the intended dark-theme design in
+`theme.css`, not a reversed legend; it looks wrong beside the light shot and
+is not.
 - Live game-feed mode, `PostgresWarehouse`.
 - Model #6 (swing decision, needs #5's P(strike) as RV(take) — now unblocked)
   and model #15 (ABS counterfactual, also now unblocked).
-- Viz 7, 10, 14, 15-18 (viz #8 and #19 now done — see above).
+- Viz 7, 10, 14, 15-18 (viz #8 and #19 done and now verified — see above).
 - Retrosheet backfill.
 - A location arsenal-style prior (where a pitcher tends to miss) as a
   next-pitch/location feature.
@@ -121,6 +189,29 @@ light/dark).
   fixed. See `HISTORY.md`'s "Arsenal embedding, API, UI, viz #12" section.
 
 ---
+
+## Open decisions — blocking, decide before the work they gate
+
+- **The ABS plate-reference plane.** In ABS games Savant reports
+  `plate_x`/`plate_z` at the plate MIDPOINT (y = 8.5in), not the front edge
+  (y = 17in): 2026 in every game type, 2025 only `game_type` S and A. The
+  shift is pitch-type dependent (CU 1.44in down to FF 0.70in — it is
+  `vz_plate x dt`, so steep pitches move furthest), so it cannot be absorbed
+  as a constant, and **4.07% of 2026 competitive pitches (~28k) flip
+  `is_in_zone` depending on which plane you pick.** Normalizing at ingest is
+  agreed; the plane is not chosen. Front edge rewrites 829,381 rows (9% of the
+  lake) and keeps every existing mart and model meaning what it meant;
+  midpoint rewrites 8.37M rows (91%), forces a full retrain, and cannot move
+  2015-2016 at all (those seasons fit NO plane — 0.20-0.35ft residual — which
+  is already why arsenal clusters start at 2020). Recommended: front edge,
+  preserving the raw Savant values, plus a per-row `plate_ref_y` column so
+  tests assert against the row's own plane instead of a hardcoded `17/12`.
+  The counterweight is future intent: if ABS-challenge modelling is on the
+  roadmap, midpoint is the honest target and is cheapest to migrate now.
+  Gates: model #15 (ABS counterfactual), any trustworthy 2026 zone/framing
+  number, and the failing canary test noted under "Verification status".
+  Full measured detail in the assistant's project memory,
+  `baseball-abs-plate-reference-shift`.
 
 ## Decisions already made — don't relitigate
 

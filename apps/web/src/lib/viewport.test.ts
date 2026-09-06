@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  fitViewport, MAX_SCALE, MIN_SCALE, nearestPoint, panBy, resetViewport, toData, toScreen, zoomAt,
+  axisStretch, fitViewport, MAX_SCALE, MIN_SCALE, nearestPoint, panBy, resetViewport, toData,
+  toScreen, zoomAt,
 } from "./viewport";
 
 describe("toScreen / toData", () => {
@@ -107,5 +108,39 @@ describe("nearestPoint", () => {
     expect(nearestPoint(far, 0, 0, vp, 16)).not.toBeNull();
     const vpZoomedIn = { x: 0, y: 0, scale: 4 };
     expect(nearestPoint(far, 0, 0, vpZoomedIn, 16)).toBeNull();
+  });
+});
+
+describe("axisStretch", () => {
+  // The real shape of the swing-path scatter: descent angle spans ~12.5 deg,
+  // attack angle ~91.4. Before the stretch this rendered in 49 of 480 pixels.
+  const vaa = [-14.73, -2.2];
+  const attack = [-47.5, 43.88];
+
+  it("makes both axes fill the frame instead of collapsing the narrow one", () => {
+    const k = axisStretch(vaa, attack, 480, 400);
+    const dwStretched = (vaa[1] - vaa[0]) * k;
+    const dh = attack[1] - attack[0];
+    // fitViewport's uniform scale is min(width/dw, height/dh); the stretch is
+    // right when neither axis is the loser by more than rounding.
+    expect(480 / dwStretched).toBeCloseTo(400 / dh, 6);
+  });
+
+  it("spends a real fraction of the width on x", () => {
+    const k = axisStretch(vaa, attack, 480, 400);
+    const scale = 0.9 * Math.min(480 / ((vaa[1] - vaa[0]) * k), 400 / (attack[1] - attack[0]));
+    const xPixels = (vaa[1] - vaa[0]) * k * scale;
+    expect(xPixels).toBeGreaterThan(0.85 * 480);
+  });
+
+  it("is a no-op for a degenerate or empty span rather than dividing by zero", () => {
+    expect(axisStretch([], [], 480, 400)).toBe(1);
+    expect(axisStretch([3, 3], [0, 10], 480, 400)).toBe(1);
+    expect(axisStretch([0, 10], [3, 3], 480, 400)).toBe(1);
+    expect(Number.isFinite(axisStretch([0, 10], [0, 10], 480, 400))).toBe(true);
+  });
+
+  it("leaves an already-square scatter in a square frame alone", () => {
+    expect(axisStretch([0, 10], [0, 10], 400, 400)).toBeCloseTo(1);
   });
 });

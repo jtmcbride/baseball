@@ -15,7 +15,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { SwingPitchRow } from "../lib/api";
 import { histogram } from "../lib/histogram";
 import { familyColor, familyOf, markerPath, pitchShape } from "../lib/scales";
-import { fitViewport, panBy, zoomAt, type Viewport } from "../lib/viewport";
+import { axisStretch, fitViewport, panBy, zoomAt, type Viewport } from "../lib/viewport";
 
 interface Props {
   pitches: SwingPitchRow[];
@@ -29,9 +29,29 @@ export function SwingPathScatter({ pitches, width = 480, height = 400 }: Props) 
   const svgRef = useRef<SVGSVGElement>(null);
   const dragState = useRef<{ x: number; y: number } | null>(null);
 
+  // `lib/viewport.ts` carries ONE scale for both axes, which is right for the
+  // spray chart (feet x feet — an anisotropic park is a wrong park) and for the
+  // arsenal map (t-SNE, where the two axes share a unit). It is wrong here:
+  // descent angle spans ~12 degrees against attack angle's ~91, so a uniform
+  // scale spent 49 of 480 horizontal pixels on the x axis and drew every
+  // batter as the same vertical ribbon. Pre-stretching x into y's units before
+  // the viewport sees it keeps that shared pan/zoom math while giving each axis
+  // the full frame. `vaa_deg` stays on the row for the hover readout, so only
+  // the plotted coordinate is stretched, never the reported number.
+  const xStretch = useMemo(
+    () =>
+      axisStretch(
+        pitches.map((p) => p.vaa_deg),
+        pitches.map((p) => p.attack_angle),
+        width,
+        height,
+      ),
+    [pitches, width, height],
+  );
+
   const points = useMemo(
-    () => pitches.map((p) => ({ ...p, x: p.vaa_deg, y: p.attack_angle })),
-    [pitches],
+    () => pitches.map((p) => ({ ...p, x: p.vaa_deg * xStretch, y: p.attack_angle })),
+    [pitches, xStretch],
   );
 
   const bounds = useMemo(() => {
@@ -153,7 +173,11 @@ export function SwingPathScatter({ pitches, width = 480, height = 400 }: Props) 
       </figure>
 
       {bins.length > 0 && (
-        <div>
+        // Width-constrained: the label row below is a space-between flex, so an
+        // unconstrained wrapper pushed "3.7" and "10.0" to the CARD's edges
+        // while the bars stopped at `width` — axis labels a third of a screen
+        // away from the axis they label.
+        <div style={{ width }}>
           <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>
             Swing length distribution (ft)
           </div>

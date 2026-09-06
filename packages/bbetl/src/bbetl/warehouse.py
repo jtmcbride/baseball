@@ -34,6 +34,10 @@ LAKE_TABLES: dict[str, str] = {
     "mart_umpire_zone": "mart_umpire_zone/*.parquet",
     "mart_pitcher_arsenal_clusters": "mart_pitcher_arsenal_clusters/*.parquet",
     "mart_batter_spray": "mart_batter_spray/*.parquet",
+    # Written by `bb-ml arsenal-embed` (bbml.marts), same self-registering
+    # shape as the marts above.
+    "mart_arsenal_embedding": "mart_arsenal_embedding/*.parquet",
+    "mart_arsenal_neighbors": "mart_arsenal_neighbors/*.parquet",
 }
 
 

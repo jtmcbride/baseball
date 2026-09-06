@@ -157,6 +157,22 @@ export function PlayerPage() {
 
   // Same reasoning as stuffRows: swing plane and framing runs don't pool
   // across seasons either, so show the most recent one on hand.
+  // The park outline defaults to the park this batter hit MOST of these balls
+  // in — his own, for any batter with a home team, since half a schedule is
+  // played there. Taking row[0]'s park instead made the default depend on row
+  // order: a career query for a Yankee opened on Citizens Bank Park because
+  // his first tracked batted ball happened to be in Philadelphia.
+  const modalHomeTeam = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of battedBallRows) {
+      if (r.home_team) counts.set(r.home_team, (counts.get(r.home_team) ?? 0) + 1);
+    }
+    let best: string | null = null;
+    let bestN = 0;
+    for (const [team, n] of counts) if (n > bestN) [best, bestN] = [team, n];
+    return best;
+  }, [battedBallRows]);
+
   const swingRow = swing.data?.[0];
   const framingRow = framing.data?.[0];
 
@@ -297,7 +313,7 @@ export function PlayerPage() {
             <SprayChart
               battedBalls={battedBallRows}
               contour={sprayContour.isError ? undefined : sprayContour.data}
-              defaultTeam={battedBallRows[0]?.home_team}
+              defaultTeam={modalHomeTeam}
             />
           ) : sprayBattedBalls.isLoading ? (
             <Skeleton h={400} />

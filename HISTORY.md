@@ -995,3 +995,144 @@ correct geometry look broken.
 **Not done:** no Playwright pass against real data (none in this environment),
 so pitch-type coverage on real arsenals (a 7-pitch arsenal overlaid) is
 unverified.
+
+---
+
+# 2026-09-06 — The arsenal router that was never mounted, and the Playwright pass that was owed
+
+Two jobs: fix the regression sitting uncommitted in the working tree, and run
+the viz #8/#19 visual verification STATUS had been carrying as outstanding
+since 2026-08-17. Both sessions since then had run without local data or a
+browser; this one had both.
+
+## The regression, and why the suite never saw it
+
+`main.py` never called `app.include_router(arsenal.router)`. Measured rather
+than assumed: `app.openapi()["paths"]` returns 31 entries on `46b3837` and 34
+with the include restored, the missing three being `/arsenal/embedding`,
+`/arsenal/{mlbam_id}` and `/arsenal/{mlbam_id}/similar`. So the whole of model
+#2 and model #11's API surface — the Arsenal map tab (viz #12), the
+re-derived-arsenal panel, "who does this pitcher resemble?" — was 404 on every
+commit that shipped it. STATUS's own "31 routes total" was recorded from the
+broken state.
+
+The interesting half is why 235+ tests stayed green over it. `test_api.py`
+guards each contract test with `_needs(health, table)`, which reads
+`health["tables"]` and calls `pytest.skip` when the table is falsy. `/health`'s
+table list was hand-written in `main.py` — the same file with the missing
+include — and it also omitted `mart_pitcher_arsenal_clusters`,
+`mart_arsenal_embedding` and `mart_arsenal_neighbors`. `.get()` on a key that
+isn't there returns None, so `_needs` skipped, and every arsenal test skipped
+with it, **including `test_embedding_route_is_matched_before_the_int_path_param`,
+which exists specifically to catch arsenal route-resolution bugs.** A skip
+guard keyed off the same file it is guarding cannot catch that file's
+omissions. The failure mode is worse than a missing test, because the test is
+right there and reads as passing.
+
+So three fixes rather than one:
+
+1. `app.include_router(arsenal.router)`.
+2. `/health`'s list is now `main.KNOWN_TABLES = tuple(sorted({*LAKE_TABLES, *SQL_MARTS}))`
+   — derived from the two modules that actually define what the pipeline can
+   produce. A mart can no longer exist without `/health` knowing about it.
+   (This also surfaced `dim_official`, which had been missing from the list
+   too.)
+3. `_needs()` now RAISES on a table `/health` has never heard of, and skips
+   only on one `/health` reports as unbuilt. Unbuilt is a legitimate local
+   state; unknown is a bug, and the two had been collapsed into one branch.
+
+Plus `TestMeta::test_every_router_module_is_mounted`, which walks
+`pkgutil.iter_modules(bbapi.routers.__path__)` and asserts every route each
+module's `router` defines appears in `app.openapi()["paths"]`. Verified in
+both directions — it fails with the include commented out and passes with it
+restored — because a regression test that has never been seen red is a
+comment.
+
+Two latent holes closed on the way. `mart_arsenal_embedding` and
+`mart_arsenal_neighbors` were never added to `bbetl.warehouse.LAKE_TABLES`;
+they self-register at write time via `marts._register_table`, so everything
+worked until someone ran a plain `bb build register` after a lake rebuild,
+which is the exact gotcha STATUS already documents in the abstract and was
+live in the concrete. And `apps/api` now declares `bbetl` in its dependencies
+instead of reaching it through `bbml` — the workspace's shared venv had been
+masking it.
+
+## Viz #8 / #19: what the pictures showed that the tests could not
+
+Playwright against the real API on :8000 and Vite on :5173 — not mocks, which
+is what the previous session had to settle for. Three batters (Judge, Ohtani,
+Arraez), light and dark. Three real bugs, every one of them invisible to a
+unit test because in all three cases the component rendered without error and
+the underlying numbers were correct.
+
+**Viz #19's x axis had collapsed to 10% of the plot.** `SwingPathScatter`
+reused `fitViewport`, and `Viewport` deliberately carries ONE `scale` — which
+is correct for the spray chart (feet against feet; an anisotropic scale draws
+a park that is not the park) and for the arsenal map (two t-SNE axes sharing a
+unit). It is wrong for a scatter of two unrelated angles. Measured on Judge:
+descent angle spans 12.53 deg, attack angle 91.38, so the uniform scale gave x
+**49 of 480 pixels**. Every batter drew as the same vertical ribbon, and the
+fastball-vs-breaking-ball separation the visualization exists to show was not
+visible at all. The fix is `axisStretch(xs, ys, width, height)` in
+`lib/viewport.ts`: pre-stretch x into y's units before `fitViewport` sees it,
+which keeps the shared pan/zoom math untouched (and makes hover hit-testing
+isotropic on screen as a side effect). `vaa_deg` stays on the row, so only the
+plotted coordinate is stretched and never the number the readout reports. Four
+tests in `viewport.test.ts`, written against the real measured spans.
+
+**Viz #8 opened on an arbitrary park.** `defaultTeam` was
+`battedBallRows[0]?.home_team` — whichever park the first row happened to come
+from. With a season filter Judge's row 0 is NYY and it looks fine; on the
+career query the UI actually renders, row 0 was a Philadelphia game, so a
+Yankee's spray chart opened over Citizens Bank Park. Now the modal
+`home_team`, which is a batter's own park for anyone with a home team, since
+half a schedule is played there.
+
+**Viz #8 had no foul lines and no home plate.** `parkPolygon` returns the wall
+arc from pole to pole and `wallPath` does not close it, so the chart was a
+bare dome floating above a point cloud, with nothing marking the origin every
+coordinate is measured from and no way to tell a ball down the line from one
+in foul ground. Added dashed foul lines home-plate-to-each-pole plus a plate
+marker, drawn under the wall and lighter than it so the fence stays the
+primary shape.
+
+**What the pass confirmed correct**, measured rather than eyeballed — worth
+recording because the first read of the screenshot was wrong and the numbers
+settled it. The screenshot gives a strong impression of batted balls scattered
+well beyond the outfield wall, which would mean a broken `x_ft`/`y_ft` scale
+or origin. It is not: reconstructing `parkPolygon` in Python and testing every
+one of Judge's 3,286 career batted balls against the Yankee Stadium wall at
+its own spray angle, **0.42% of non-home-runs (12 balls) plot beyond the
+wall.** A scale or origin error could not produce that number. 5.17% fall
+outside the foul lines, which is foul-territory batted-ball events. And 61.5%
+of home runs plot INSIDE the wall — which is not a bug either but the
+`hc_x`/`hc_y` caveat this project already measured (a charted fielding
+location, ~28ft MAE, not a landing point) showing up exactly where you would
+expect it. The spline reproduces its five measured distance markers to the
+foot and is monotone in angle.
+
+One near-miss worth writing down: the dark-mode diverging legend reads
+light-blue → dark-blue → dark-mid → dark-red → light-red, the opposite
+lightness profile from light mode, and it looks like a reversed ramp when you
+put the two screenshots side by side. It is not. `theme.css` inverts the
+`--div-cool-*`/`--div-warm-*` lightness under dark so the SATURATED extreme is
+the LIGHTEST step — highest contrast against a dark ground — while
+`--div-mid` sits near the surface colour so neutral values recede. Hue order
+is preserved and `divergingColor` indexes by `|t|` either way. Checking the
+CSS instead of trusting the eye is what kept this out of the bug list.
+
+**Verification.** 64 frontend tests (was 60; +4 `axisStretch`), `tsc
+--noEmit`, `oxlint`, `ruff check`. On the backend: the targeted `TestMeta` +
+`TestArsenal*` selection passes (15 passed, plus the one deliberate failure
+below), and the full suite was stopped at 27% (135 tests, no failures in that
+prefix) rather than run to completion — **re-run `uv run pytest` before
+trusting this commit's backend state.** One backend test is left FAILING on
+purpose:
+`TestArsenalTrajectories::test_flight_lands_on_the_pitch_own_plate_crossing`
+gets a 0.098 ft vertical residual reconstructing an exemplar to `17/12` ft
+whenever the sampled exemplar comes from an ABS game. That is the ABS
+plate-reference canary firing as designed, and it should stay red until the
+plane is chosen — widening the tolerance would delete the only automated
+detector for a shift that flips `is_in_zone` on ~28k 2026 pitches. STATUS now
+carries that choice in an explicit "Open decisions" section rather than only
+in project memory.

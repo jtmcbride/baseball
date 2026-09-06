@@ -192,6 +192,21 @@ export function SprayChart({ battedBalls, contour, defaultTeam, width = 520, hei
               />
             ))}
 
+            {/* Foul lines + home plate. Without them the wall is a bare arc
+                floating over the points: nothing marks the origin the whole
+                chart is measured from, and fair balls down the line are
+                indistinguishable from foul ground. Drawn lighter than the
+                wall so the fence stays the primary shape. */}
+            <path
+              d={foulLinePath(wallFlipped)}
+              fill="none"
+              stroke="var(--text-primary)"
+              strokeWidth={1.5 / vp.scale}
+              opacity={0.5}
+              strokeDasharray={`${6 / vp.scale} ${4 / vp.scale}`}
+            />
+            <circle cx={0} cy={0} r={4 / vp.scale} fill="var(--text-primary)" opacity={0.7} />
+
             <path
               d={wallPath(wallFlipped)}
               fill="none"
@@ -256,4 +271,12 @@ export function SprayChart({ battedBalls, contour, defaultTeam, width = 520, hei
 function wallPath(points: Point2[]): string {
   if (points.length === 0) return "";
   return `M${points.map((p) => `${p.x},${p.y}`).join("L")}`;
+}
+
+/** Home plate out to each foul pole — the two ends of the wall polygon. */
+function foulLinePath(wall: Point2[]): string {
+  if (wall.length === 0) return "";
+  const lf = wall[0];
+  const rf = wall[wall.length - 1];
+  return `M${lf.x},${lf.y}L0,0L${rf.x},${rf.y}`;
 }

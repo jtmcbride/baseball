@@ -78,6 +78,29 @@ export function fitViewport(
   return { scale, x: cx - width / 2 / scale, y: cy - height / 2 / scale };
 }
 
+/**
+ * How far to stretch data-space x before handing points to `fitViewport`, so
+ * that a scatter whose two axes carry DIFFERENT units fills the frame on both.
+ *
+ * `Viewport` deliberately carries a single `scale`: the spray chart plots feet
+ * against feet, where an anisotropic scale draws a park that is not the park,
+ * and the arsenal map's two t-SNE axes share a unit for the same reason. A
+ * scatter of two unrelated angles has no such constraint, and forcing one on
+ * it collapses the narrower axis — pitch descent angle spans ~12 degrees
+ * against attack angle's ~91, which spent 10% of the plot width on x.
+ * Multiply x by this before fitting; keep the raw value on the row for
+ * anything the user reads.
+ *
+ * Returns 1 (no stretch) when either span is degenerate.
+ */
+export function axisStretch(xs: number[], ys: number[], width: number, height: number): number {
+  if (xs.length === 0 || ys.length === 0) return 1;
+  const dw = Math.max(...xs) - Math.min(...xs);
+  const dh = Math.max(...ys) - Math.min(...ys);
+  if (!(dw > 1e-6) || !(dh > 1e-6)) return 1;
+  return (dh / dw) * (width / height);
+}
+
 export interface Locatable {
   x: number;
   y: number;

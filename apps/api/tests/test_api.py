@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import io
 import math
 
@@ -24,7 +25,16 @@ def health(client: TestClient) -> dict:
 
 
 def _needs(health: dict, table: str) -> None:
-    if not health["tables"].get(table):
+    """Skip when the pipeline hasn't built `table` — but FAIL when /health has
+    never heard of it.
+
+    The distinction matters: a table missing from /health's list makes every
+    test guarded on it skip silently, which is exactly how an unmounted
+    `arsenal` router shipped with a green suite.
+    """
+    if table not in health["tables"]:
+        raise AssertionError(f"/health does not report '{table}' — see main.KNOWN_TABLES")
+    if not health["tables"][table]:
         pytest.skip(f"{table} not built — run the pipeline first")
 
 
@@ -38,6 +48,25 @@ def a_pitcher(client: TestClient, health: dict) -> int:
 
 
 class TestMeta:
+    def test_every_router_module_is_mounted(self, client):
+        """Regression: `routers/arsenal.py` existed, was tested, and was never
+        passed to `include_router` — so /arsenal/* 404'd on a green suite."""
+        import pkgutil
+
+        from bbapi import routers
+
+        mounted = set(client.app.openapi()["paths"])
+        for mod in pkgutil.iter_modules(routers.__path__):
+            module = importlib.import_module(f"bbapi.routers.{mod.name}")
+            router = getattr(module, "router", None)
+            if router is None:
+                continue
+            for route in router.routes:
+                assert route.path in mounted, (
+                    f"bbapi.routers.{mod.name} defines {route.path} but it is not "
+                    "mounted — add `app.include_router(...)` in main.py"
+                )
+
     def test_health_reports_pipeline_state(self, client):
         r = client.get("/health")
         assert r.status_code == 200
