@@ -7,7 +7,10 @@ API + UI surface, and every dedicated visualization those models unlocked
 map) is built too. Viz #8 (spray chart) and #19 (swing path) are built AND
 now Playwright-verified against real data** (2026-09-06 — the check STATUS
 had been carrying as outstanding since 2026-08-17; it found three real bugs,
-see "Viz #8/#19 verification" below). **A regression on `main` that silenced
+see "Viz #8/#19 verification" below). **Model #6 (swing decision) is trained
+on the full lake (held-out swing MSE 0.04195), with 6,245 batter-season rows and
+4,864 spatial decision maps; Viz #14's player-page surface is implemented.**
+**A regression on `main` that silenced
 the whole model #2/#11 API surface has been fixed** — see "Arsenal router"
 below. The full 2015-2026 backfill has landed (9,202,082 pitches, contiguous)
 and every model has been retrained on it. Officials data (umpire per game) is
@@ -173,9 +176,8 @@ is monotone in angle. The dark-mode diverging ramp inverts lightness
 `theme.css`, not a reversed legend; it looks wrong beside the light shot and
 is not.
 - Live game-feed mode, `PostgresWarehouse`.
-- Model #6 (swing decision, needs #5's P(strike) as RV(take) — now unblocked)
-  and model #15 (ABS counterfactual, also now unblocked).
-- Viz 7, 10, 14, 15-18 (viz #8 and #19 done and now verified — see above).
+- Model #15 (ABS counterfactual, also now unblocked).
+- Viz 7, 10, 15-18 (viz #8, #14, and #19 done — #8/#19 verified; see above).
 - Retrosheet backfill.
 - A location arsenal-style prior (where a pitcher tends to miss) as a
   next-pitch/location feature.

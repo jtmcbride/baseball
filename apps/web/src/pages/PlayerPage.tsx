@@ -62,6 +62,16 @@ export function PlayerPage() {
     enabled: !!playerId && role === "batter",
   });
 
+  // Viz #14: model #6's counterfactual recommendation surface. It is separate
+  // from the regular zone selector because this is not an observed outcome
+  // metric; it is expected RV(swing) minus expected RV(take).
+  const swingDecisionZone = useQuery({
+    queryKey: ["swing-decision-zone", playerId, season],
+    queryFn: () => api.zones(playerId!, "batter", "decision", season ?? undefined),
+    enabled: !!playerId && role === "batter",
+    retry: false,
+  });
+
   const swingPitchRows = useMemo(() => {
     if (!swingPitches.data) return [];
     return columns<SwingPitchRow>(swingPitches.data, [
@@ -279,6 +289,25 @@ export function PlayerPage() {
             <SwingPanel row={swingRow} />
           ) : (
             <Skeleton h={110} />
+          )}
+        </section>
+      )}
+
+      {role === "batter" && (
+        <section className="card">
+          <h3>Swing / take map{season ? ` · ${season}` : ""}</h3>
+          <p className="subtitle">
+            Expected value of swinging minus taking at each location. Warm cells favor a swing;
+            cool cells favor patience. Faded cells have too little pitch evidence to trust.
+          </p>
+          {swingDecisionZone.isError ? (
+            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              No swing-decision map yet — train model #6 with <code>bb-ml swing-decision</code>.
+            </p>
+          ) : swingDecisionZone.data ? (
+            <StrikeZoneHeatmap grid={swingDecisionZone.data} />
+          ) : (
+            <Skeleton h={380} />
           )}
         </section>
       )}

@@ -36,6 +36,7 @@ from bbml.models.arsenal import MIN_RELIABLE_SEASON as ARSENAL_MIN_RELIABLE_SEAS
 from bbml.models.arsenal import build_arsenal_clusters
 from bbml.models.called_strike import CalledStrikeModel, framing_runs, umpire_zone_rate
 from bbml.models.pitch_quality import PitchQualityModel
+from bbml.models.swing_decision import SwingDecisionModel, decision_value_by_batter, score_decisions
 from bbml.models.swing_path import SwingPathModel, plane_value_by_batter
 from bbml.registry import latest_dir
 
@@ -181,6 +182,7 @@ def build_catcher_framing_mart(
 
 
 MART_BATTER_SWING = "mart_batter_swing"
+MART_BATTER_SWING_DECISION = "mart_batter_swing_decision"
 
 # Matches `bb-ml swing`'s own default qualifier — a mart built with a looser
 # threshold than the CLI leaderboard it's meant to agree with would be a
@@ -230,6 +232,46 @@ def build_batter_swing_mart(
         .sort(["season", "whiff_plane_value_per_100"], descending=[False, True])
     )
     _write(out, MART_BATTER_SWING, s)
+    return out
+
+
+def build_batter_swing_decision_mart(
+    *,
+    seasons: list[int] | None = None,
+    min_pitches: int = 200,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """`mart_batter_swing_decision`: counterfactual decision value by batter-season.
+
+    This deliberately loads the registered called-strike artifact rather than
+    refitting an in-sample strike baseline: a take's value is only meaningful
+    when P(strike) remains calibrated out of sample.
+    """
+    from bbml.features.swing_decision import TARGET_VALUE, build_swing_decision_frame
+
+    s = settings or get_settings()
+    directory = latest_dir("swing_decision")
+    if directory is None:
+        raise FileNotFoundError(
+            "No registered swing_decision model. Run `bb-ml swing-decision` first."
+        )
+    decision_model = SwingDecisionModel.load(directory)
+    called_strike_model, _called_strike_rv = load_called_strike_model()
+    frame = build_swing_decision_frame(seasons=seasons, settings=s)
+    # The model's saved count table defines its batting-RV target.  It is also
+    # used for both options, so no historical run-environment drift becomes an
+    # apparent preference for swinging or taking.
+    model_rv = RunValue.load(directory / "run_value.json")
+    frame = (
+        model_rv
+        .attach(frame)
+        .with_columns((-pl.col("rv_pitcher")).alias(TARGET_VALUE))
+    )
+    if frame.height == 0:
+        return pl.DataFrame()
+    scored = score_decisions(frame, decision_model, called_strike_model, model_rv)
+    out = decision_value_by_batter(scored, min_pitches=min_pitches).rename({"batter": "mlbam_id"})
+    _write(out, MART_BATTER_SWING_DECISION, s)
     return out
 
 
@@ -315,6 +357,46 @@ def _build_entity_grids(
             }
         )
     return pl.DataFrame(rows)
+
+
+def build_batter_swing_decision_grid(
+    *,
+    seasons: list[int] | None = None,
+    min_pitches: int = MIN_GRID_PITCHES,
+    settings: Settings | None = None,
+) -> pl.DataFrame:
+    """Viz #14's expected `RV(swing) - RV(take)` surface per batter-season.
+
+    This is a recommendation map, not a heatmap of what the batter actually
+    chose.  The same smooth surface can therefore make the counterfactual
+    visible even in locations a hitter rarely sees or swings at; reliability
+    still fades areas without enough observed pitches.
+    """
+    from bbml.features.swing_decision import build_swing_decision_frame
+
+    s = settings or get_settings()
+    directory = latest_dir("swing_decision")
+    if directory is None:
+        raise FileNotFoundError("No registered swing_decision model. Run `bb-ml swing-decision` first.")
+    decision_model = SwingDecisionModel.load(directory)
+    called_strike_model, _called_strike_rv = load_called_strike_model()
+    frame = build_swing_decision_frame(seasons=seasons, settings=s)
+    if frame.height == 0:
+        return pl.DataFrame()
+    model_rv = RunValue.load(directory / "run_value.json")
+    scored = score_decisions(frame, decision_model, called_strike_model, model_rv).with_columns(
+        (pl.col("expected_swing_value") - pl.col("expected_take_value")).alias("_decision_edge")
+    )
+    out = _build_entity_grids(
+        scored,
+        id_col="batter",
+        role="batter",
+        spec=MetricSpec("decision", "_decision_edge"),
+        min_pitches=min_pitches,
+    )
+    if out.height:
+        _write_zone_grid(out, "batter", s)
+    return out
 
 
 def build_catcher_framing_grid(

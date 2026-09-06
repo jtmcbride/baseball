@@ -306,6 +306,100 @@ def build_swing_mart(
     console.print(f"[green]mart_batter_swing: {mart.height} rows[/green]")
 
 
+@app.command("swing-decision")
+def train_swing_decision(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+    rounds: Annotated[int, typer.Option(help="Max boosting rounds.")] = 1500,
+    min_pitches: Annotated[int, typer.Option(help="Batter-season qualifier.")] = 200,
+) -> None:
+    """Train model #6: expected swing value versus model #5's expected take value.
+
+    Train `bb-ml called-strike` first. Its calibrated P(called strike) is the
+    take counterfactual; substituting raw take outcomes would grade umpires,
+    not hitters' decisions.
+    """
+    import polars as pl
+
+    from bbml import datasets as ds
+    from bbml.features.run_value import RunValue
+    from bbml.features.stuff import load_pitch_frame
+    from bbml.features.swing_decision import TARGET_VALUE, build_swing_decision_frame
+    from bbml.marts import (
+        build_batter_swing_decision_grid,
+        build_batter_swing_decision_mart,
+        load_called_strike_model,
+    )
+    from bbml.models.swing_decision import (
+        SwingDecisionModel,
+        decision_value_by_batter,
+        score_decisions,
+    )
+    from bbml.registry import save_model
+
+    frame = build_swing_decision_frame(seasons=list(season) if season else None).sort(
+        ["game_date", "game_pk", "at_bat_number", "pitch_number"]
+    )
+    # The target's count table is fitted only on training seasons, then carried
+    # with the artifact; otherwise a 2026 outcome leaks into its own label.
+    raw_split = ds.auto_split(frame, check_features=False)
+    train_seasons = sorted(raw_split.train["season"].unique().to_list())
+    rv = RunValue.fit(load_pitch_frame(seasons=train_seasons))
+    frame = rv.attach(frame).with_columns((-pl.col("rv_pitcher")).alias(TARGET_VALUE))
+    split = ds.auto_split(frame, check_features=False)
+    model = SwingDecisionModel().fit(split.train, split.val, num_boost_round=rounds)
+    test_swings = split.test.filter(pl.col("is_swing") & pl.col(TARGET_VALUE).is_not_null())
+    mse = float(
+        (
+            (model.predict_swing_value(test_swings) - test_swings[TARGET_VALUE].to_numpy()) ** 2
+        ).mean()
+    )
+    directory = save_model(
+        model,
+        "swing_decision",
+        params={"rounds": rounds, "best_iteration": model.best_iteration},
+        metrics={"swing_test_mse": mse},
+    )
+    rv.save(directory / "run_value.json")
+    called_strike, _ = load_called_strike_model()
+    board = decision_value_by_batter(
+        score_decisions(split.test, model, called_strike, rv), min_pitches=min_pitches
+    )
+    console.print(f"swing test MSE={mse:.5f}; saved {directory}")
+    table = Table(title="swing decision — value left on the table")
+    for col in ("batter", "season", "per 100", "pitches"):
+        table.add_column(col, justify="right")
+    for row in board.head(5).iter_rows(named=True):
+        table.add_row(
+            str(row["batter"]),
+            str(row["season"]),
+            f"{row['decision_value_per_100']:+.3f}",
+            f"{row['pitches']:,}",
+        )
+    console.print(table)
+    mart = build_batter_swing_decision_mart(
+        seasons=list(season) if season else None, min_pitches=min_pitches
+    )
+    console.print(f"[green]mart_batter_swing_decision: {mart.height} rows[/green]")
+    grid = build_batter_swing_decision_grid(seasons=list(season) if season else None)
+    console.print(f"[green]mart_zone_profile (swing decision): {grid.height} grids[/green]")
+
+
+@app.command("swing-decision-mart")
+def build_swing_decision_mart(
+    season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,
+    min_pitches: Annotated[int, typer.Option(help="Batter-season qualifier.")] = 200,
+) -> None:
+    """Rebuild model #6's batter-season counterfactual decision mart."""
+    from bbml.marts import build_batter_swing_decision_grid, build_batter_swing_decision_mart
+
+    mart = build_batter_swing_decision_mart(
+        seasons=list(season) if season else None, min_pitches=min_pitches
+    )
+    console.print(f"[green]mart_batter_swing_decision: {mart.height} rows[/green]")
+    grid = build_batter_swing_decision_grid(seasons=list(season) if season else None)
+    console.print(f"[green]mart_zone_profile (swing decision): {grid.height} grids[/green]")
+
+
 @app.command("spray-mart")
 def build_spray_mart(
     season: Annotated[list[int] | None, typer.Option(help="Repeatable. Defaults to all.")] = None,

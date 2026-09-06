@@ -188,6 +188,16 @@ export const ZONE_METRICS: Record<string, MetricDef> = {
     key: "run_value", label: "Run value", mid: 0, halfRange: 0.09,
     format: (v) => v.toFixed(3), higherIsBatterGood: true,
   },
+  // Viz #14: model #6's counterfactual edge before observing the hitter's
+  // choice. Positive means the pitch is better to swing at; negative means a
+  // take has the higher expected batting value. This provisional 0.04 RV
+  // range keeps one pitch from saturating the map; recalibrate from reliable
+  // full-lake cells after the first model run lands.
+  decision: {
+    key: "decision", label: "Swing − take value", mid: 0, halfRange: 0.04,
+    format: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(3)} RV`, higherIsBatterGood: true,
+    legendLabels: ["take", "swing"],
+  },
   // Catcher framing edge (viz #20): actual_strike - P(strike) at that spot,
   // the same residual `framing_runs` sums, left un-aggregated. mid/halfRange
   // set from the real grid data (p1/p99 on reliable cells: -0.13 / +0.11).

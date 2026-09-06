@@ -250,6 +250,31 @@ class RunValue:
         key = _count_key(balls, strikes)
         return key.replace_strict(table, default=None).to_numpy().astype(float)
 
+    def expected_take_value(
+        self, balls: pl.Series, strikes: pl.Series, p_strike: np.ndarray
+    ) -> np.ndarray:
+        """Expected batting run value of taking a pitch at this count.
+
+        A take can become either the next ball count (or a walk) or the next
+        strike count (or a strikeout).  `marginal_strike_value` supplies their
+        difference; the ball-call value anchors that difference to the current
+        count.  This is deliberately here, beside the count table, rather than
+        reimplemented by each consumer of called-strike probabilities.
+        """
+        ball_values: dict[str, float] = {}
+        for b in range(MAX_BALLS + 1):
+            for s in range(MAX_STRIKES + 1):
+                current = self.count_re.get(f"{b}-{s}", float("nan"))
+                ball_after = (
+                    self.event_value.get("walk", float("nan"))
+                    if b + 1 > MAX_BALLS
+                    else self.count_re.get(f"{b + 1}-{s}", float("nan"))
+                )
+                ball_values[f"{b}-{s}"] = ball_after - current
+        key = _count_key(balls, strikes)
+        ball = key.replace_strict(ball_values, default=None).to_numpy().astype(float)
+        return ball - np.asarray(p_strike, dtype=float) * self.marginal_strike_value(balls, strikes)
+
     # --- persistence ---------------------------------------------------------
 
     def to_dict(self) -> dict:
